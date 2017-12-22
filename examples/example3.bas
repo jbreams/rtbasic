@@ -1,0 +1,10 @@
+EXTERN PRINTF(fmt AS STRING, ...)
+
+LET Y = 3
+
+PRINTLABEL:
+    PRINTF("Hello, world!\n")
+
+IF Y = 4 THEN GOTO PRINTLABEL ELSE PRINTF("Foobar")
+
+
