@@ -130,22 +130,77 @@ void BlockAST::addStatement(std::unique_ptr<ExprAST> statement) {
     _lines.push_back(std::move(statement));
 }
 
+std::unique_ptr<ProtoDefAST> makeGosubProto(const LabelAST* label) {
+    std::vector<ProtoDefAST::Argument> args;
+    return std::make_unique<ProtoDefAST>(label->token(),
+                                         label->ctx(),
+                                         boost::get<std::string>(label->token().value),
+                                         std::move(args),
+                                         false,
+                                         Void);
+}
+
+std::unique_ptr<FunctionCallAST> makeGosubCall(const LabelAST* label) {
+    std::vector<std::unique_ptr<ExprAST>> args;
+    return std::make_unique<FunctionCallAST>(label->token(),
+                                             label->ctx(),
+                                             boost::get<std::string>(label->token().value),
+                                             std::move(args));
+}
+
 std::unique_ptr<ExprAST> BlockAST::parse(const Token& tok,
                                          BasicContext* ctx,
                                          StopCheck::List stopAt) {
-    std::vector<std::unique_ptr<ExprAST>> lines;
     StopCheck stopCheck(stopAt);
 
+    std::vector<std::unique_ptr<ExprAST>> blockLines;
+    std::list<std::unique_ptr<ExprAST>> mainLines;
     for (Token curTok = tok; !stopCheck(curTok); curTok = ctx->lexer.lex()) {
         auto line = LineAST::parse(curTok, ctx);
         if (ctx->currentFunction || line->token().isFunctionDef()) {
-            lines.push_back(std::move(line));
+            blockLines.push_back(std::move(line));
         } else {
-            ctx->mainFunction->addStatement(std::move(line));
+            mainLines.push_back(std::move(line));
         }
     }
 
-    return std::make_unique<BlockAST>(tok, ctx, std::move(lines));
+    FunctionAST* curGosub = nullptr;
+    for (auto& lineExpr : mainLines) {
+        auto line = static_cast<LineAST*>(lineExpr.get());
+        if (curGosub) {
+            curGosub->addStatement(std::move(lineExpr));
+            if (line->token().tag == Token::Return) {
+                curGosub = nullptr;
+            }
+            continue;
+        }
+
+        auto label = line->label();
+        if (!label || !label->isGosub()) {
+            continue;
+        }
+        label->markGosub(false);
+
+        auto proto = makeGosubProto(label);
+        bool inserted;
+        std::tie(std::ignore, inserted) = ctx->externFunctions.emplace(proto->name(), proto.get());
+        if (!inserted) {
+            throw ParseException("Gosub function being created already exists!");
+        }
+
+        blockLines.push_back(std::make_unique<FunctionAST>(label->token(), ctx, std::move(proto)));
+        curGosub = static_cast<FunctionAST*>(blockLines.back().get());
+        curGosub->addStatement(std::move(lineExpr));
+        lineExpr = makeGosubCall(label);
+    }
+
+    for (auto& lineExpr : mainLines) {
+        if (lineExpr) {
+            ctx->mainFunction->addStatement(std::move(lineExpr));
+        }
+    }
+
+    return std::make_unique<BlockAST>(tok, ctx, std::move(blockLines));
 }
 
 struct OperatorInfo {
@@ -233,7 +288,6 @@ std::unique_ptr<ExprAST> BinaryExprAST::_parseRHS(BasicContext* ctx,
         }
         lhs = std::make_unique<BinaryExprAST>(op, ctx, std::move(lhs), std::move(rhs));
     }
-
 
     return lhs;
 }
@@ -355,9 +409,11 @@ std::unique_ptr<ExprAST> LetAST::parse(const Token& tok, BasicContext* ctx) {
     }
 
     auto value = ExprAST::parse(ctx->lexer.lex(), ctx);
+    bool global = (ctx->currentFunction == nullptr);
     ctx->namedVariables[name] = nullptr;
 
-    return std::make_unique<LetAST>(tok, ctx, name, type, std::move(value));
+    return std::make_unique<LetAST>(tok, ctx, name, type, std::move(value), global);
+    ;
 }
 
 std::string lexString(Lexer* lexer) {
@@ -384,20 +440,18 @@ std::unique_ptr<ExprAST> GotoAST::parse(const Token& tok, BasicContext* ctx) {
 }
 
 std::unique_ptr<ExprAST> GosubAST::parse(const Token& tok, BasicContext* ctx) {
-    auto it = ctx->labels.find(lexString(&ctx->lexer));
+    auto labelName = lexString(&ctx->lexer);
+    auto it = ctx->labels.find(labelName);
     if (it == ctx->labels.end()) {
         throw ParseException("Tried to gosub to a label that doesn't exist yet");
     }
-    return std::make_unique<GosubAST>(tok, ctx, it->first);
+    it->second->markGosub(true);
+
+    return makeGosubCall(it->second);
 }
 
 std::unique_ptr<ExprAST> ReturnAST::parse(const Token& tok, BasicContext* ctx) {
-    auto nextTok = ctx->lexer.peek();
-    if (!nextTok.isEnding()) {
-        return std::make_unique<ReturnAST>(tok, ctx, ExprAST::parse(ctx->lexer.lex(), ctx));
-    } else {
-        return std::make_unique<ReturnAST>(tok, ctx, nullptr);
-    }
+    return std::make_unique<ReturnAST>(tok, ctx);
 }
 
 std::unique_ptr<ExprAST> ForAST::parse(const Token& tok, BasicContext* ctx) {

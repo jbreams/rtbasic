@@ -102,8 +102,13 @@ llvm::Value* VariableExprAST::codegen() {
     auto name = boost::get<std::string>(token().value);
     auto it = ctx()->namedVariables.find(name);
     if (it == ctx()->namedVariables.end()) {
-        std::cerr << "Could not find named value for " << name << std::endl;
-        return nullptr;
+        auto global = ctx()->module->getGlobalVariable(name);
+        if (!global) {
+            std::cerr << "Could not find named value for " << name << std::endl;
+            return nullptr;
+        }
+
+        return ctx()->builder.CreateLoad(global, name);
     }
 
     auto& builder = ctx()->builder;
@@ -112,6 +117,32 @@ llvm::Value* VariableExprAST::codegen() {
 
 llvm::Value* LetAST::codegen() {
     auto& builder = ctx()->builder;
+
+    if (_global) {
+        llvm::Type* type = nullptr;
+        llvm::Constant* initV;
+        if (_type == Double) {
+            type = llvm::Type::getDoubleTy(ctx()->context);
+            initV = llvm::ConstantFP::get(type, 0.0);
+        } else if (_type == String) {
+            type = llvm::Type::getInt8PtrTy(ctx()->context);
+            initV = llvm::ConstantPointerNull::get(llvm::Type::getInt8PtrTy(ctx()->context));
+        }
+        auto globalPtr = ctx()->module->getOrInsertGlobal(_name, type);
+        auto global = ctx()->module->getGlobalVariable(_name);
+        if (!global->hasInitializer()) {
+            global->setInitializer(initV);
+            global->setLinkage(llvm::GlobalValue::CommonLinkage);
+        }
+
+        auto ret = _value->codegen();
+        if (!ret) {
+            std::cerr << "Error generating value for global variable" << std::endl;
+            return nullptr;
+        }
+        builder.CreateStore(ret, globalPtr);
+        return ret;
+    }
 
     llvm::Value* initV;
     if (_value) {
@@ -228,20 +259,12 @@ llvm::Value* GotoAST::codegen() {
 }
 
 llvm::Value* GosubAST::codegen() {
-    std::cerr << "Gosubs aren't supported yet" << std::endl;
+    std::cerr << "Gosubs aren't a real codegen type" << std::endl;
     return nullptr;
 }
 
 llvm::Value* ReturnAST::codegen() {
-    llvm::Value* retValue = nullptr;
-    if (_returnValue) {
-        retValue = _returnValue->codegen();
-        retValue = ctx()->builder.CreateRet(retValue);
-    } else {
-        retValue = ctx()->builder.CreateRetVoid();
-    }
-
-    return retValue;
+    return ctx()->builder.CreateRetVoid();
 }
 
 llvm::Value* ForAST::codegen() {
@@ -385,7 +408,11 @@ llvm::Value* FunctionCallAST::codegen() {
         }
     }
 
-    return ctx()->builder.CreateCall(callee, args, "calltmp");
+    if (callee->getReturnType()->isVoidTy()) {
+        return ctx()->builder.CreateCall(callee, args);
+    } else {
+        return ctx()->builder.CreateCall(callee, args, "calltmp");
+    }
 }
 
 llvm::Value* ProtoDefAST::codegen() {

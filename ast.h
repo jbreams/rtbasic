@@ -14,7 +14,6 @@
 
 class ExprAST;
 class LabelAST;
-class LetAST;
 struct BasicContext;
 class ProtoDefAST;
 class FunctionAST;
@@ -44,7 +43,6 @@ struct BasicContext {
     std::unordered_map<std::string, ProtoDefAST*> externFunctions;
     std::unordered_map<std::string, LabelAST*> labels;
     std::unordered_map<std::string, llvm::AllocaInst*> namedVariables;
-    std::unordered_map<std::string, std::string> stringConstants;
 };
 
 enum VariableType {
@@ -133,10 +131,18 @@ public:
     int used() const {
         return _uses;
     }
+    void markGosub(bool val) {
+        _isGosubTarget = val;
+    }
+    bool isGosub() const {
+        return _isGosubTarget;
+    }
+
+    const std::string& name() const;
 
 private:
-    const std::string& name() const;
     int _uses = 0;
+    bool _isGosubTarget = false;
     llvm::BasicBlock* _value = nullptr;
 };
 
@@ -155,6 +161,9 @@ public:
                                           StopCheck::List stopAt = {Token::End});
     llvm::Value* codegen() override;
     const Token& token() const override;
+    LabelAST* label() const {
+        return static_cast<LabelAST*>(_label.get());
+    }
 
 private:
     std::unique_ptr<ExprAST> _label;
@@ -209,11 +218,13 @@ public:
            BasicContext* ctx,
            std::string name,
            VariableType type,
-           std::unique_ptr<ExprAST> value)
+           std::unique_ptr<ExprAST> value,
+           bool global)
         : ExprAST(std::move(tok), ctx),
           _name(std::move(name)),
           _value(std::move(value)),
-          _type(type) {}
+          _type(type),
+          _global(global) {}
 
     llvm::Value* codegen() override;
     static std::unique_ptr<ExprAST> parse(const Token& tok, BasicContext* ctx);
@@ -230,6 +241,7 @@ private:
     std::string _name;
     std::unique_ptr<ExprAST> _value;
     VariableType _type;
+    bool _global;
     llvm::AllocaInst* _alloca;
 };
 
@@ -298,14 +310,10 @@ private:
 
 class ReturnAST : public ExprAST {
 public:
-    ReturnAST(Token tok, BasicContext* ctx, std::unique_ptr<ExprAST> returnValue)
-        : ExprAST(std::move(tok), ctx), _returnValue(std::move(returnValue)) {}
+    ReturnAST(Token tok, BasicContext* ctx) : ExprAST(std::move(tok), ctx) {}
 
     llvm::Value* codegen() override;
     static std::unique_ptr<ExprAST> parse(const Token& tok, BasicContext* ctx);
-
-private:
-    std::unique_ptr<ExprAST> _returnValue;
 };
 
 class ForAST : public ExprAST {
