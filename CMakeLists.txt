@@ -14,11 +14,11 @@ include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 
 # Now build our tools
-add_executable(rtbasic ast.cpp lexer.cpp codegen.cpp main.cpp)
+add_executable(rtbasic ast.cpp lexer.cpp codegen.cpp main.cpp cli.cpp)
 
 # Find the libraries that correspond to the LLVM components
 # that we wish to use
-llvm_map_components_to_libnames(llvm_libs support core irreader)
+llvm_map_components_to_libnames(llvm_libs all)
 
 # Link against LLVM libraries
-target_link_libraries(rtbasic ${llvm_libs})
+target_link_libraries(rtbasic LLVM-5.0)
