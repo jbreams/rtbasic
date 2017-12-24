@@ -2,15 +2,16 @@
 #include <fstream>
 #include <iostream>
 
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/Support/Path.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Host.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/raw_os_ostream.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 
@@ -77,20 +78,20 @@ int main(int argc, char** argv) {
     if (llvm::verifyModule(*ctx.module, &errStream))
         return 1;
 
-    std::unique_ptr<llvm::raw_ostream> output; 
+    std::unique_ptr<llvm::raw_fd_ostream> output;
     llvm::SmallString<128> path(opts.outputFilename);
     if (opts.outputFilename.empty()) {
         path = opts.inputFilename;
-        switch(opts.outputType) {
-        case Options::LLVMIR:
-            llvm::sys::path::replace_extension(path, "ll");
-            break;
-        case Options::Assembly:
-            llvm::sys::path::replace_extension(path, "s");
-            break;
-        case Options::ObjectCode:
-            llvm::sys::path::replace_extension(path, "o");
-            break;
+        switch (opts.outputType) {
+            case Options::LLVMIR:
+                llvm::sys::path::replace_extension(path, "ll");
+                break;
+            case Options::Assembly:
+                llvm::sys::path::replace_extension(path, "s");
+                break;
+            case Options::ObjectCode:
+                llvm::sys::path::replace_extension(path, "o");
+                break;
         }
     }
 
@@ -101,7 +102,26 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    ctx.module->print(*output, nullptr);
+    llvm::legacy::PassManager passManager;
+    llvm::TargetMachine::CodeGenFileType fileType;
+    switch (opts.outputType) {
+        case Options::Assembly:
+            fileType = llvm::TargetMachine::CGFT_AssemblyFile;
+            break;
+        case Options::ObjectCode:
+            fileType = llvm::TargetMachine::CGFT_ObjectFile;
+            break;
+        case Options::LLVMIR:
+            ctx.module->print(*output, nullptr);
+            return 0;
+    }
 
+    if (target->addPassesToEmitFile(passManager, *output, fileType)) {
+        std::cerr << "Cannot emit file of this type" << std::endl;
+        return 1;
+    }
+
+    passManager.run(*ctx.module);
+    output->flush();
     return 0;
 }
