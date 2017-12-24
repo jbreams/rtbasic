@@ -29,6 +29,21 @@ llvm::Function* BasicContext::getFunction(const std::string& name) {
     return module->getFunction(name);
 }
 
+bool BasicContext::codegenAllProtos() {
+    if (!mainFunction->proto()->codegen()) {
+        std::cerr << "Error generating prototype for main";
+        return false;
+    }
+
+    for (auto proto : externFunctions) {
+        if (!module->getFunction(proto.second->name()) && !proto.second->codegen()) {
+            std::cerr << "Error generating prototype for " << proto.first;
+            return false;
+        }
+    }
+    return true;
+}
+
 llvm::Value* makeLiteralDouble(BasicContext* ctx, double val) {
     return llvm::ConstantFP::get(ctx->context, llvm::APFloat(val));
 }
@@ -387,7 +402,7 @@ llvm::Value* RemarkAST::codegen() {
 }
 
 llvm::Value* FunctionCallAST::codegen() {
-    auto callee = ctx()->module->getFunction(_function);
+    auto callee = ctx()->getFunction(_function);
     if (!callee) {
         std::cerr << "Unknown function call" << std::endl;
         return nullptr;
@@ -416,6 +431,10 @@ llvm::Value* FunctionCallAST::codegen() {
 }
 
 llvm::Value* ProtoDefAST::codegen() {
+    if (auto preGenerated = ctx()->getFunction(_name)) {
+        return preGenerated;
+    }
+
     std::vector<llvm::Type*> args;
     for (const auto& arg : _args) {
         switch (arg.type) {
@@ -462,11 +481,10 @@ llvm::Function* FunctionAST::function() const {
 
 llvm::Value* FunctionAST::codegen() {
     _function = ctx()->getFunction(_proto->name());
-    if (!_function && !_proto->codegen()) {
+    if (!_function) {
         std::cerr << "Error finding prototype for function" << std::endl;
         return nullptr;
     }
-    _function = ctx()->getFunction(_proto->name());
 
     ctx()->currentFunction = this;
     auto bb = llvm::BasicBlock::Create(ctx()->context, "entry", _function);

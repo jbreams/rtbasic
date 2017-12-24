@@ -16,6 +16,8 @@ int main(int argc, char** argv) {
     BasicContext ctx(std::move(lexer), argv[1]);
 
     auto programBody = BlockAST::parse(ctx.lexer.lex(), &ctx);
+    if (!ctx.codegenAllProtos())
+        return 1;
 
     auto topLevel = programBody->codegen();
     if (!topLevel)

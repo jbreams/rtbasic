@@ -164,18 +164,24 @@ std::unique_ptr<ExprAST> BlockAST::parse(const Token& tok,
         }
     }
 
-    FunctionAST* curGosub = nullptr;
+    std::deque<FunctionAST*> curGosubs;
     for (auto& lineExpr : mainLines) {
         auto line = static_cast<LineAST*>(lineExpr.get());
-        if (curGosub) {
+        auto label = line->label();
+        if (!curGosubs.empty() && !(label && label->isGosub())) {
+            auto& curGosub = curGosubs.front();
             curGosub->addStatement(std::move(lineExpr));
             if (line->token().tag == Token::Return) {
-                curGosub = nullptr;
+                curGosubs.pop_front();
+                while (!curGosubs.empty()) {
+                    curGosubs.front()->addStatement(
+                        std::make_unique<ReturnAST>(line->token(), ctx));
+                    curGosubs.pop_front();
+                }
             }
             continue;
         }
 
-        auto label = line->label();
         if (!label || !label->isGosub()) {
             continue;
         }
@@ -189,9 +195,13 @@ std::unique_ptr<ExprAST> BlockAST::parse(const Token& tok,
         }
 
         blockLines.push_back(std::make_unique<FunctionAST>(label->token(), ctx, std::move(proto)));
-        curGosub = static_cast<FunctionAST*>(blockLines.back().get());
+        auto curGosub = static_cast<FunctionAST*>(blockLines.back().get());
         curGosub->addStatement(std::move(lineExpr));
         lineExpr = makeGosubCall(label);
+        if (!curGosubs.empty()) {
+            curGosubs.front()->addStatement(makeGosubCall(label));
+        }
+        curGosubs.push_front(curGosub);
     }
 
     for (auto& lineExpr : mainLines) {

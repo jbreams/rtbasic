@@ -40,6 +40,8 @@ struct BasicContext {
     std::unique_ptr<FunctionAST> mainFunction;
     FunctionAST* currentFunction = nullptr;
 
+    bool codegenAllProtos();
+
     std::unordered_map<std::string, ProtoDefAST*> externFunctions;
     std::unordered_map<std::string, LabelAST*> labels;
     std::unordered_map<std::string, llvm::AllocaInst*> namedVariables;
@@ -445,6 +447,9 @@ public:
     llvm::Function* function() const;
     static std::unique_ptr<ExprAST> parse(const Token& tok, BasicContext* ctx);
     void addStatement(std::unique_ptr<ExprAST> statement);
+    ProtoDefAST* proto() const {
+        return _proto.get();
+    }
 
 private:
     void _setBody(std::unique_ptr<ExprAST> body);
