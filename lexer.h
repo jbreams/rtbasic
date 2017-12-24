@@ -1,6 +1,7 @@
 #pragma once
 
 #include <boost/variant.hpp>
+#include <deque>
 #include <istream>
 #include <ostream>
 #include <string>

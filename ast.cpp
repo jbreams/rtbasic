@@ -1,6 +1,8 @@
 #include <cstdlib>
 #include <deque>
 #include <iostream>
+#include <list>
+#include <sstream>
 
 #include "boost/optional.hpp"
 
