@@ -181,10 +181,12 @@ public:
 
     static std::unique_ptr<ExprAST> parse(const Token& tok,
                                           BasicContext* ctx,
-                                          StopCheck::List stopAt = {Token::End});
+                                          StopCheck::List stopAt = {Token::End},
+                                          bool topLevel = false);
     llvm::Value* codegen() override;
 
     void addStatement(std::unique_ptr<ExprAST> statement);
+
 
 private:
     std::vector<std::unique_ptr<ExprAST>> _lines;
@@ -229,7 +231,9 @@ public:
           _global(global) {}
 
     llvm::Value* codegen() override;
-    static std::unique_ptr<ExprAST> parse(const Token& tok, BasicContext* ctx);
+    static std::unique_ptr<ExprAST> parse(const Token& tok,
+                                          BasicContext* ctx,
+                                          bool maybeGlobal = true);
 
     llvm::AllocaInst* allocaInst() const {
         return _alloca;

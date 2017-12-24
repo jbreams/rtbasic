@@ -285,8 +285,9 @@ llvm::Value* ReturnAST::codegen() {
 llvm::Value* ForAST::codegen() {
     auto& builder = ctx()->builder;
     auto curFunction = ctx()->getCurrentFunction();
+    auto controlVar = static_cast<LetAST*>(_controlVar.get());
 
-    if (!_controlVar->codegen()) {
+    if (!controlVar->codegen()) {
         std::cerr << "Error generating control variable" << std::endl;
         return nullptr;
     }
@@ -294,14 +295,6 @@ llvm::Value* ForAST::codegen() {
     auto loopBB = llvm::BasicBlock::Create(ctx()->context, "loop", curFunction);
     builder.CreateBr(loopBB);
     builder.SetInsertPoint(loopBB);
-
-    const auto& controlVarName = _getControlVar()->name();
-    llvm::AllocaInst* oldControlVar = nullptr;
-    if (ctx()->namedVariables.find(controlVarName) != ctx()->namedVariables.end()) {
-        oldControlVar = ctx()->namedVariables[controlVarName];
-    }
-    ctx()->namedVariables[controlVarName] = _getControlVar()->allocaInst();
-    auto controlVarAlloca = _getControlVar()->allocaInst();
 
     if (!_bodyExpr->codegen()) {
         std::cerr << "Error generating for loop body" << std::endl;
@@ -325,21 +318,15 @@ llvm::Value* ForAST::codegen() {
         return nullptr;
     }
 
-    auto curVar = builder.CreateLoad(controlVarAlloca, controlVarName);
+    auto curVar = builder.CreateLoad(controlVar->allocaInst());
     auto nextVar = builder.CreateFAdd(curVar, stepV, "nextvar");
-    builder.CreateStore(nextVar, controlVarAlloca);
+    builder.CreateStore(nextVar, controlVar->allocaInst());
 
-    endV = builder.CreateFCmpONE(endV, makeLiteralDouble(ctx(), 0.0), "loopcond");
+    endV = builder.CreateFCmpONE(endV, nextVar, "loopcond");
 
     auto afterBB = llvm::BasicBlock::Create(ctx()->context, "afterloop", curFunction);
     builder.CreateCondBr(endV, loopBB, afterBB);
     builder.SetInsertPoint(afterBB);
-
-    if (oldControlVar) {
-        ctx()->namedVariables[controlVarName] = oldControlVar;
-    } else {
-        ctx()->namedVariables.erase(controlVarName);
-    }
 
     return llvm::Constant::getNullValue(llvm::Type::getDoubleTy(ctx()->context));
 }

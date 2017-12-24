@@ -152,14 +152,15 @@ std::unique_ptr<FunctionCallAST> makeGosubCall(const LabelAST* label) {
 
 std::unique_ptr<ExprAST> BlockAST::parse(const Token& tok,
                                          BasicContext* ctx,
-                                         StopCheck::List stopAt) {
+                                         StopCheck::List stopAt,
+                                         bool topLevel) {
     StopCheck stopCheck(stopAt);
 
     std::vector<std::unique_ptr<ExprAST>> blockLines;
     std::list<std::unique_ptr<ExprAST>> mainLines;
     for (Token curTok = tok; !stopCheck(curTok); curTok = ctx->lexer.lex()) {
         auto line = LineAST::parse(curTok, ctx);
-        if (ctx->currentFunction || line->token().isFunctionDef()) {
+        if (ctx->currentFunction || line->token().isFunctionDef() || !topLevel) {
             blockLines.push_back(std::move(line));
         } else {
             mainLines.push_back(std::move(line));
@@ -394,7 +395,7 @@ std::unique_ptr<ExprAST> IfAST::parse(const Token& tok, BasicContext* ctx) {
         tok, ctx, std::move(condExpr), std::move(statementExpr), std::move(elseBody));
 }
 
-std::unique_ptr<ExprAST> LetAST::parse(const Token& tok, BasicContext* ctx) {
+std::unique_ptr<ExprAST> LetAST::parse(const Token& tok, BasicContext* ctx, bool maybeGlobal) {
     Token nameTok = tok;
     if (tok.tag == Token::Let) {
         nameTok = ctx->lexer.lex();
@@ -421,11 +422,10 @@ std::unique_ptr<ExprAST> LetAST::parse(const Token& tok, BasicContext* ctx) {
     }
 
     auto value = ExprAST::parse(ctx->lexer.lex(), ctx);
-    bool global = (ctx->currentFunction == nullptr);
+    bool global = (ctx->currentFunction == nullptr && maybeGlobal);
     ctx->namedVariables[name] = nullptr;
 
     return std::make_unique<LetAST>(tok, ctx, name, type, std::move(value), global);
-    ;
 }
 
 std::string lexString(Lexer* lexer) {
@@ -467,17 +467,7 @@ std::unique_ptr<ExprAST> ReturnAST::parse(const Token& tok, BasicContext* ctx) {
 }
 
 std::unique_ptr<ExprAST> ForAST::parse(const Token& tok, BasicContext* ctx) {
-    auto controlVarTok = ctx->lexer.lex();
-    if (controlVarTok.tag != Token::String) {
-        throw ParseException("Expected control variable name (string");
-    }
-
-    const auto& controlVarName = boost::get<std::string>(controlVarTok.value);
-    bool hasOldControlVar = (ctx->namedVariables.find(controlVarName) != ctx->namedVariables.end());
-    auto controlVar = LetAST::parse(ctx->lexer.lex(), ctx);
-    if (!hasOldControlVar) {
-        ctx->namedVariables.erase(controlVarName);
-    }
+    auto controlVar = LetAST::parse(ctx->lexer.lex(), ctx, false);
 
     if (ctx->lexer.lex().tag != Token::To) {
         throw ParseException("Expected TO after FOR let statement");
@@ -494,7 +484,15 @@ std::unique_ptr<ExprAST> ForAST::parse(const Token& tok, BasicContext* ctx) {
         bodyTok = maybeStep;
     }
 
-    auto bodyExpr = BlockAST::parse(bodyTok, ctx, {Token::Next});
+    std::unique_ptr<ExprAST> bodyExpr;
+    if (bodyTok.isEnding()) {
+        bodyExpr = BlockAST::parse(ctx->lexer.lex(), ctx, {Token::Next});
+    } else {
+        bodyExpr = StatementAST::parse(bodyTok, ctx);
+        if (ctx->lexer.lex().tag != Token::Next) {
+            throw ParseException("Expected NEXT after for body");
+        }
+    }
 
     return std::make_unique<ForAST>(tok,
                                     ctx,

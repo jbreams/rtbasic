@@ -36,7 +36,7 @@ llvm::TargetMachine* buildTargetMachine() {
     auto features = "";
 
     llvm::TargetOptions opt;
-    auto RM = llvm::Optional<llvm::Reloc::Model>();
+    auto RM = llvm::Optional<llvm::Reloc::Model>(llvm::Reloc::PIC_);
     return target->createTargetMachine(targetTriple, CPU, features, opt, RM);
 }
 
@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
 
     BasicContext ctx(std::move(lexer), opts.inputFilename, opts.mainFunctionName);
 
-    auto programBody = BlockAST::parse(ctx.lexer.lex(), &ctx);
+    auto programBody = BlockAST::parse(ctx.lexer.lex(), &ctx, {Token::End}, true);
 
     auto target = buildTargetMachine();
     if (!target)
