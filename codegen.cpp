@@ -56,21 +56,22 @@ const std::string& LabelAST::name() const {
     return boost::get<std::string>(token().value);
 }
 
-void LabelAST::incrementUsed() {
-    _uses++;
+llvm::Value* LabelAST::value() {
+    if (!_value) {
+        _value = llvm::BasicBlock::Create(ctx()->context, boost::get<std::string>(token().value));
+    }
+    return _value;
 }
 
 llvm::Value* LabelAST::codegen() {
     auto& builder = ctx()->builder;
-    if (_uses == 0) {
+    auto& labelInfo = ctx()->labels.at(name());
+    if (labelInfo.gotos == 0) {
         return nullptr;
     }
 
-    _value = llvm::BasicBlock::Create(
-        ctx()->context, boost::get<std::string>(token().value), ctx()->getCurrentFunction());
-
     auto curBB = builder.GetInsertBlock();
-    auto newBB = llvm::BasicBlock::Create(ctx()->context, name(), ctx()->getCurrentFunction());
+    auto newBB = static_cast<llvm::BasicBlock*>(value());
 
     if (curBB && !curBB->getTerminator()) {
         builder.CreateBr(newBB);
@@ -78,13 +79,12 @@ llvm::Value* LabelAST::codegen() {
 
     ctx()->getCurrentFunction()->getBasicBlockList().insertAfter(curBB->getIterator(), newBB);
     builder.SetInsertPoint(newBB);
-    _value = newBB;
     return _value;
 }
 
 llvm::Value* LineAST::codegen() {
     LabelAST* label = static_cast<LabelAST*>(_label.get());
-    if (label && !label->codegen() && label->used() > 0)
+    if (label && !label->codegen() && ctx()->labels.at(label->name()).gotos > 0)
         return nullptr;
 
     if (_statement) {
@@ -265,11 +265,11 @@ llvm::Value* RelOpExprAST::codegen() {
 llvm::Value* GotoAST::codegen() {
     auto& builder = ctx()->builder;
     auto labelIt = ctx()->labels.find(_label);
-    if (labelIt == ctx()->labels.end()) {
+    if (labelIt == ctx()->labels.end() || !labelIt->second.label) {
         std::cerr << "Could not find label for goto statement: " << _label;
         return nullptr;
     }
-    builder.CreateBr(static_cast<llvm::BasicBlock*>(labelIt->second->value()));
+    builder.CreateBr(static_cast<llvm::BasicBlock*>(labelIt->second.label->value()));
     return llvm::ConstantFP::get(builder.getDoubleTy(), 0);
 }
 

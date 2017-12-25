@@ -142,12 +142,11 @@ std::unique_ptr<ProtoDefAST> makeGosubProto(const LabelAST* label) {
                                          Void);
 }
 
-std::unique_ptr<FunctionCallAST> makeGosubCall(const LabelAST* label) {
+std::unique_ptr<FunctionCallAST> makeGosubCall(const Token& tok,
+                                               BasicContext* ctx,
+                                               std::string name) {
     std::vector<std::unique_ptr<ExprAST>> args;
-    return std::make_unique<FunctionCallAST>(label->token(),
-                                             label->ctx(),
-                                             boost::get<std::string>(label->token().value),
-                                             std::move(args));
+    return std::make_unique<FunctionCallAST>(tok, ctx, name, std::move(args));
 }
 
 std::unique_ptr<ExprAST> BlockAST::parse(const Token& tok,
@@ -171,7 +170,12 @@ std::unique_ptr<ExprAST> BlockAST::parse(const Token& tok,
     for (auto& lineExpr : mainLines) {
         auto line = static_cast<LineAST*>(lineExpr.get());
         auto label = line->label();
-        if (!curGosubs.empty() && !(label && label->isGosub())) {
+        LabelInfo* labelInfo;
+        if (label) {
+            labelInfo = &ctx->labels.at(label->name());
+        }
+
+        if (!curGosubs.empty() && !(label && labelInfo->isGosub)) {
             auto& curGosub = curGosubs.front();
             curGosub->addStatement(std::move(lineExpr));
             if (line->token().tag == Token::Return) {
@@ -185,10 +189,9 @@ std::unique_ptr<ExprAST> BlockAST::parse(const Token& tok,
             continue;
         }
 
-        if (!label || !label->isGosub()) {
+        if (!label || !labelInfo->isGosub) {
             continue;
         }
-        label->markGosub(false);
 
         auto proto = makeGosubProto(label);
         bool inserted;
@@ -200,9 +203,12 @@ std::unique_ptr<ExprAST> BlockAST::parse(const Token& tok,
         blockLines.push_back(std::make_unique<FunctionAST>(label->token(), ctx, std::move(proto)));
         auto curGosub = static_cast<FunctionAST*>(blockLines.back().get());
         curGosub->addStatement(std::move(lineExpr));
-        lineExpr = makeGosubCall(label);
+        lineExpr = std::make_unique<LineAST>(line->token(),
+                                             ctx,
+                                             line->releaseLabel(),
+                                             makeGosubCall(line->token(), ctx, label->name()));
         if (!curGosubs.empty()) {
-            curGosubs.front()->addStatement(makeGosubCall(label));
+            curGosubs.front()->addStatement(makeGosubCall(line->token(), ctx, label->name()));
         }
         curGosubs.push_front(curGosub);
     }
@@ -331,12 +337,12 @@ std::unique_ptr<ExprAST> LabelAST::parse(const Token& tok, BasicContext* ctx) {
     decltype(ctx->labels)::iterator it;
 
     std::tie(it, inserted) = ctx->labels.emplace(labelName, nullptr);
-    if (!inserted) {
+    if (!inserted && it->second.label) {
         throw ParseException("Duplicate label definition");
     }
 
     auto ret = std::make_unique<LabelAST>(tok, ctx);
-    it->second = ret.get();
+    it->second.label = ret.get();
     return ret;
 }
 
@@ -445,9 +451,10 @@ std::unique_ptr<ExprAST> GotoAST::parse(const Token& tok, BasicContext* ctx) {
     auto gotoName = lexString(&ctx->lexer);
     auto it = ctx->labels.find(gotoName);
     if (it == ctx->labels.end()) {
-        throw ParseException("Tried to go to a label that doesn't exist yet");
+        std::tie(it, std::ignore) = ctx->labels.emplace(gotoName, 1);
+    } else {
+        it->second.gotos++;
     }
-    it->second->incrementUsed();
     return std::make_unique<GotoAST>(tok, ctx, it->first);
 }
 
@@ -455,11 +462,12 @@ std::unique_ptr<ExprAST> GosubAST::parse(const Token& tok, BasicContext* ctx) {
     auto labelName = lexString(&ctx->lexer);
     auto it = ctx->labels.find(labelName);
     if (it == ctx->labels.end()) {
-        throw ParseException("Tried to gosub to a label that doesn't exist yet");
+        std::tie(it, std::ignore) = ctx->labels.emplace(labelName, true);
+    } else {
+        it->second.isGosub = true;
     }
-    it->second->markGosub(true);
 
-    return makeGosubCall(it->second);
+    return makeGosubCall(tok, ctx, labelName);
 }
 
 std::unique_ptr<ExprAST> ReturnAST::parse(const Token& tok, BasicContext* ctx) {

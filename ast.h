@@ -18,6 +18,16 @@ struct BasicContext;
 class ProtoDefAST;
 class FunctionAST;
 
+struct LabelInfo {
+    explicit LabelInfo(int initialGotos) : gotos(initialGotos) {}
+    explicit LabelInfo(bool initialGosub) : isGosub(initialGosub), gotos(1) {}
+    explicit LabelInfo(LabelAST* ptr) : label(ptr) {}
+
+    int gotos = 0;
+    bool isGosub = false;
+    LabelAST* label = nullptr;
+};
+
 struct BasicContext {
     BasicContext(Lexer lexer, std::string fileName, std::string mainName = "main")
         : lexer(std::move(lexer)),
@@ -43,7 +53,7 @@ struct BasicContext {
     bool codegenAllProtos();
 
     std::unordered_map<std::string, ProtoDefAST*> externFunctions;
-    std::unordered_map<std::string, LabelAST*> labels;
+    std::unordered_map<std::string, LabelInfo> labels;
     std::unordered_map<std::string, llvm::AllocaInst*> namedVariables;
 };
 
@@ -125,26 +135,11 @@ public:
 
     static std::unique_ptr<ExprAST> parse(const Token& tok, BasicContext* ctx);
     llvm::Value* codegen() override;
-    llvm::Value* value() const {
-        return _value;
-    }
-
-    void incrementUsed();
-    int used() const {
-        return _uses;
-    }
-    void markGosub(bool val) {
-        _isGosubTarget = val;
-    }
-    bool isGosub() const {
-        return _isGosubTarget;
-    }
+    llvm::Value* value();
 
     const std::string& name() const;
 
 private:
-    int _uses = 0;
-    bool _isGosubTarget = false;
     llvm::BasicBlock* _value = nullptr;
 };
 
@@ -165,6 +160,10 @@ public:
     const Token& token() const override;
     LabelAST* label() const {
         return static_cast<LabelAST*>(_label.get());
+    }
+
+    std::unique_ptr<ExprAST> releaseLabel() {
+        return std::move(_label);
     }
 
 private:
