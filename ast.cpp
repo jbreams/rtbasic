@@ -261,7 +261,8 @@ std::unique_ptr<ExprAST> parsePrimary(const Token& tok, BasicContext* ctx) {
                 return VariableExprAST::parse(tok, ctx);
             }
         }
-        case Token::Number:
+        case Token::Integer:
+        case Token::Double:
             return NumberExprAST::parse(tok, ctx);
         case Token::EscapedString:
             return StringAST::parse(tok, ctx);
@@ -417,7 +418,7 @@ std::unique_ptr<ExprAST> LetAST::parse(const Token& tok, BasicContext* ctx, bool
     } else if (maybeTypeAnnotation.tag == Token::Pound) {
         type = Double;
     } else {
-        type = Double;
+        type = Integer;
         ctx->lexer.putBack(maybeTypeAnnotation);
     }
 
@@ -439,9 +440,13 @@ std::string lexString(Lexer* lexer) {
     std::string gotoName;
     if (labelTok.tag == Token::String) {
         gotoName = boost::get<std::string>(labelTok.value);
-    } else if (labelTok.tag == Token::Number) {
+    } else if (labelTok.tag == Token::Double) {
         std::stringstream ss;
         ss << boost::get<double>(labelTok.value);
+        gotoName = ss.str();
+    } else if (labelTok.tag == Token::Integer) {
+        std::stringstream ss;
+        ss << boost::get<int64_t>(labelTok.value);
         gotoName = ss.str();
     }
     return gotoName;

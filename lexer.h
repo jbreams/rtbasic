@@ -10,7 +10,8 @@ struct Token {
     virtual ~Token() = default;
 
     enum Tag {
-        Number,
+        Double,
+        Integer,
         String,
         EscapedString,
         Newline,
@@ -40,6 +41,8 @@ struct Token {
         Return,
         End,
         Rem,
+        And,
+        Or,
 
         Lte,
         Gte,
@@ -79,7 +82,7 @@ struct Token {
     }
 
     Tag tag = MaxTag;
-    boost::variant<std::string, double, char> value;
+    boost::variant<std::string, int64_t, double, char> value;
 };
 
 std::ostream& operator<<(std::ostream& stream, const Token& token);
@@ -121,7 +124,7 @@ private:
     Token _lex();
 
     friend class LexerError;
-    double _extractNumber();
+    Token _extractNumber();
     long _extractInt(int base = 10);
     std::string _extractEscapedString(char endAt);
 

@@ -59,6 +59,7 @@ struct BasicContext {
 
 enum VariableType {
     Double,
+    Integer,
     String,
     Void  // There are no void variables, but SUB's return void
 };

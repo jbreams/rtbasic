@@ -48,6 +48,10 @@ llvm::Value* makeLiteralDouble(BasicContext* ctx, double val) {
     return llvm::ConstantFP::get(ctx->context, llvm::APFloat(val));
 }
 
+llvm::Value* makeLiteralInteger(BasicContext* ctx, int64_t val) {
+    return llvm::ConstantInt::getSigned(ctx->builder.getInt64Ty(), val);
+}
+
 llvm::Value* StatementAST::codegen() {
     return nullptr;
 }
@@ -105,7 +109,14 @@ llvm::Value* BlockAST::codegen() {
 }
 
 llvm::Value* NumberExprAST::codegen() {
-    return makeLiteralDouble(ctx(), boost::get<double>(token().value));
+    if (token().tag == Token::Double) {
+        return makeLiteralDouble(ctx(), boost::get<double>(token().value));
+    } else if (token().tag == Token::Integer) {
+        return makeLiteralInteger(ctx(), boost::get<int64_t>(token().value));
+    } else {
+        std::cerr << "Invalid token for number expr" << std::endl;
+        return nullptr;
+    }
 }
 
 llvm::Value* StringAST::codegen() {
@@ -139,6 +150,9 @@ llvm::Value* LetAST::codegen() {
         if (_type == Double) {
             type = llvm::Type::getDoubleTy(ctx()->context);
             initV = llvm::ConstantFP::get(type, 0.0);
+        } else if (_type == Integer) {
+            type = llvm::Type::getInt64Ty(ctx()->context);
+            initV = llvm::ConstantInt::getSigned(type, 0);
         } else if (_type == String) {
             type = llvm::Type::getInt8PtrTy(ctx()->context);
             initV = llvm::ConstantPointerNull::get(llvm::Type::getInt8PtrTy(ctx()->context));
@@ -166,8 +180,20 @@ llvm::Value* LetAST::codegen() {
             std::cerr << "Error generating initial value for let variable" << std::endl;
             return nullptr;
         }
+
+        if (_type == Double && initV->getType() != ctx()->builder.getDoubleTy()) {
+            initV = ctx()->builder.CreateFPCast(initV, ctx()->builder.getDoubleTy());
+        } else if (_type == Integer && initV->getType() != ctx()->builder.getInt64Ty()) {
+            initV = ctx()->builder.CreateIntCast(initV, ctx()->builder.getInt64Ty(), true);
+        }
+        if (!initV) {
+            std::cerr << "Error casting initial value for let variable" << std::endl;
+            return nullptr;
+        }
     } else if (_type == Double) {
         initV = makeLiteralDouble(ctx(), 0.0);
+    } else if (_type == Integer) {
+        initV = makeLiteralInteger(ctx(), 0);
     } else if (_type == String) {
         initV = llvm::ConstantPointerNull::get(llvm::Type::getInt8PtrTy(ctx()->context));
     } else {
@@ -198,16 +224,35 @@ llvm::Value* BinaryExprAST::codegen() {
         return nullptr;
     }
 
+    if (l->getType() != r->getType()) {
+        std::cerr << "Type for LHS " << l->getType() << " is not the same as the RHS "
+                  << r->getType() << std::endl;
+        return nullptr;
+    }
+    bool intVal = l->getType()->isIntegerTy();
+
     auto& builder = ctx()->builder;
     switch (token().tag) {
         case Token::Plus:
-            return builder.CreateFAdd(l, r, "addtmp");
+            if (intVal)
+                return builder.CreateAdd(l, r, "addtmp");
+            else
+                return builder.CreateFAdd(l, r, "addtmp");
         case Token::Minus:
-            return builder.CreateFSub(l, r, "subtmp");
+            if (intVal)
+                return builder.CreateSub(l, r, "addtmp");
+            else
+                return builder.CreateFSub(l, r, "subtmp");
         case Token::Multiply:
-            return builder.CreateFMul(l, r, "multmp");
+            if (intVal)
+                return builder.CreateMul(l, r, "multmp");
+            else
+                return builder.CreateFMul(l, r, "multmp");
         case Token::Divide:
-            return builder.CreateFDiv(l, r, "divtmp");
+            if (intVal)
+                return builder.CreateSDiv(l, r, "divtmp");
+            else
+                return builder.CreateFDiv(l, r, "divtmp");
         case Token::Exp: {
             auto powFunction = ctx()->getFunction("pow");
             if (!powFunction) {
@@ -231,35 +276,63 @@ llvm::Value* RelOpExprAST::codegen() {
         return nullptr;
     }
 
+    if (l->getType() != r->getType()) {
+        std::cerr << "Type for LHS " << l->getType() << " is not the same as the RHS "
+                  << r->getType() << std::endl;
+        return nullptr;
+    }
+    bool intVal = l->getType()->isIntegerTy();
+
     auto& builder = ctx()->builder;
     auto& llvmcontext = ctx()->context;
 
     llvm::Value* res;
     switch (token().tag) {
         case Token::Gt:
-            res = builder.CreateFCmpUGT(l, r, "cmptmp");
+            if (intVal)
+                res = builder.CreateICmpSGT(l, r, "cmptmp");
+            else
+                res = builder.CreateFCmpUGT(l, r, "cmptmp");
             break;
         case Token::Gte:
-            res = builder.CreateFCmpUGE(l, r, "cmptmp");
+            if (intVal)
+                res = builder.CreateICmpSGE(l, r, "cmptmp");
+            else
+                res = builder.CreateFCmpUGE(l, r, "cmptmp");
             break;
         case Token::Lt:
-            res = builder.CreateFCmpULT(l, r, "cmptmp");
+            if (intVal)
+                res = builder.CreateICmpSLT(l, r, "cmptmp");
+            else
+                res = builder.CreateFCmpULT(l, r, "cmptmp");
             break;
         case Token::Lte:
-            res = builder.CreateFCmpULE(l, r, "cmptmp");
+            if (intVal)
+                res = builder.CreateICmpSLE(l, r, "cmptmp");
+            else
+                res = builder.CreateFCmpULE(l, r, "cmptmp");
             break;
         case Token::Neq:
-            res = builder.CreateFCmpUNE(l, r, "cmptmp");
+            if (intVal)
+                res = builder.CreateICmpNE(l, r, "cmptmp");
+            else
+                res = builder.CreateFCmpUNE(l, r, "cmptmp");
             break;
         case Token::Eq:
-            res = builder.CreateFCmpUEQ(l, r, "cmptmp");
+            if (intVal)
+                res = builder.CreateICmpEQ(l, r, "cmptmp");
+            else
+                res = builder.CreateFCmpUEQ(l, r, "cmptmp");
             break;
         default:
             std::cerr << "Invalid token for comparison operator" << std::endl;
             return nullptr;
     }
 
-    return builder.CreateUIToFP(res, llvm::Type::getDoubleTy(llvmcontext), "booltmp");
+    if (intVal)
+        return res;
+    else
+        return builder.CreateUIToFP(res, llvm::Type::getDoubleTy(llvmcontext), "booltmp");
 }
 
 llvm::Value* GotoAST::codegen() {
@@ -291,6 +364,7 @@ llvm::Value* ForAST::codegen() {
         std::cerr << "Error generating control variable" << std::endl;
         return nullptr;
     }
+    auto controlVarIsInt = controlVar->allocaInst()->getAllocatedType()->isIntegerTy();
 
     auto loopBB = llvm::BasicBlock::Create(ctx()->context, "loop", curFunction);
     builder.CreateBr(loopBB);
@@ -309,7 +383,11 @@ llvm::Value* ForAST::codegen() {
             return nullptr;
         }
     } else {
-        stepV = makeLiteralDouble(ctx(), 1.0);
+        if (controlVarIsInt) {
+            stepV = makeLiteralInteger(ctx(), 1.0);
+        } else {
+            stepV = makeLiteralDouble(ctx(), 1);
+        }
     }
 
     auto endV = _toExpr->codegen();
@@ -319,10 +397,19 @@ llvm::Value* ForAST::codegen() {
     }
 
     auto curVar = builder.CreateLoad(controlVar->allocaInst());
-    auto nextVar = builder.CreateFAdd(curVar, stepV, "nextvar");
+    llvm::Value* nextVar;
+    if (controlVarIsInt) {
+        nextVar = builder.CreateAdd(curVar, stepV, "nextvar");
+    } else {
+        nextVar = builder.CreateFAdd(curVar, stepV, "nextvar");
+    }
     builder.CreateStore(nextVar, controlVar->allocaInst());
 
-    endV = builder.CreateFCmpONE(endV, nextVar, "loopcond");
+    if (controlVarIsInt) {
+        endV = builder.CreateICmpEQ(endV, nextVar, "loopcond");
+    } else {
+        endV = builder.CreateFCmpONE(endV, nextVar, "loopcond");
+    }
 
     auto afterBB = llvm::BasicBlock::Create(ctx()->context, "afterloop", curFunction);
     builder.CreateCondBr(endV, loopBB, afterBB);
@@ -340,7 +427,10 @@ llvm::Value* IfAST::codegen() {
     }
 
     auto& builder = ctx()->builder;
-    cond = builder.CreateFCmpONE(cond, makeLiteralDouble(ctx(), 0.0), "ifcond");
+    if (cond->getType()->isDoubleTy())
+        cond = builder.CreateFCmpONE(cond, makeLiteralDouble(ctx(), 0.0), "ifcond");
+    else
+        cond = builder.CreateICmpNE(cond, builder.getFalse(), "ifcond");
 
     auto curFunction = ctx()->getCurrentFunction();
     auto thenBB = llvm::BasicBlock::Create(ctx()->context, "then", curFunction);

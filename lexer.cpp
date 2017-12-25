@@ -1,3 +1,4 @@
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -9,6 +10,7 @@
 using StringToTagMap = std::unordered_map<std::string, Token::Tag>;
 const StringToTagMap& stringToTagMap() {
     static const StringToTagMap _stringToTag = {
+        {"AND", Token::And},
         {"AS", Token::As},
         {"DOUBLE", Token::DoubleType},
         {"ELSE", Token::Else},
@@ -21,6 +23,7 @@ const StringToTagMap& stringToTagMap() {
         {"IF", Token::If},
         {"INPUT", Token::Input},
         {"LET", Token::Let},
+        {"OR", Token::Or},
         {"NEXT", Token::Next},
         {"PRINT", Token::Print},
         {"RETURN", Token::Return},
@@ -75,13 +78,28 @@ LexerError::LexerError(Lexer* lexer, const char* message) {
     _message = ss.str();
 }
 
-double Lexer::_extractNumber() {
+Token Lexer::_extractNumber() {
     auto ptr = _line.c_str() + _pos;
     char* endPtr = nullptr;
-    double val = std::strtod(ptr, &endPtr);
+    int64_t intVal = 0;
+    double intPart;
+    double dblVal = std::strtod(ptr, &endPtr);
+    bool isDouble = true;
+
+    if (dblVal == HUGE_VAL) {
+        intVal = std::strtoll(ptr, &endPtr, 10);
+        isDouble = false;
+    } else if (std::modf(dblVal, &intPart) == 0) {
+        intVal = intPart;
+        isDouble = false;
+    }
     _pos = (endPtr - ptr) + _pos;
 
-    return val;
+    if (isDouble) {
+        return Token(Token::Double, dblVal);
+    } else {
+        return Token(Token::Integer, intVal);
+    }
 }
 
 long Lexer::_extractInt(int base) {
@@ -207,7 +225,7 @@ Token Lexer::_lex() {
     auto charIt = charToTag.find(_line[_pos]);
     if (charIt != charToTag.end()) {
         if (charIt->second == Token::Minus && std::isdigit(_line[_pos + 1])) {
-            return Token(Token::Number, _extractNumber());
+            return _extractNumber();
         } else if (charIt->second == Token::Gt) {
             auto nextChar = _line[++_pos];
             if (nextChar == '=') {
@@ -232,10 +250,10 @@ Token Lexer::_lex() {
     } else if (std::isdigit(_line[_pos])) {
         if (isFirstToken) {  // The first token seen on a line (that's a number) is a line label
             std::stringstream ss;
-            ss << _extractNumber();
+            ss << _extractInt();
             return Token(Token::Label, ss.str());
         }
-        return Token(Token::Number, _extractNumber());
+        return _extractNumber();
     } else if (_line[_pos] == '\"') {
         return Token(Token::EscapedString, _extractEscapedString('\"'));
     } else if (_line[_pos] == '.') {
