@@ -42,6 +42,24 @@ std::unique_ptr<FunctionAST> BasicContext::makeMainFunction(std::string name) {
     return std::make_unique<FunctionAST>(programToken, this, std::move(programProto));
 }
 
+std::string BasicContext::makeVariableName(const Token& tok, VariableType* typeOut) {
+    const std::string& name = tok.strValue;
+    VariableType type = Void;
+    char end = name.at(name.size() - 1);
+    if (end == '#') {
+        type = Double;
+    } else if (end == '$') {
+        type = String;
+    }
+    if (typeOut)
+        *typeOut = type;
+    return name;
+}
+
+bool BasicContext::isNamedVariable(const Token& tok) {
+    return namedVariables.find(makeVariableName(tok)) != namedVariables.end();
+}
+
 std::unique_ptr<ExprAST> LineAST::parse(const Token& tok,
                                         BasicContext* ctx,
                                         StopCheck::List stopAt) {
@@ -108,18 +126,22 @@ std::unique_ptr<ExprAST> StatementAST::parse(const Token& tok, BasicContext* ctx
             return FunctionAST::parse(tok, ctx);
         case Token::Function:
             return FunctionAST::parse(tok, ctx);
+        case Token::Variable:
+            if (ctx->lexer.peek().tag != Token::Eq) {
+                throw ParseException("Expected = in variable assignment");
+            }
         case Token::Let:
             return LetAST::parse(tok, ctx);
         case Token::String: {
-            const auto& val = boost::get<std::string>(tok.value);
-            if (ctx->externFunctions.find(val) != ctx->externFunctions.end()) {
+            const auto& name = tok.strValue;
+            if (ctx->externFunctions.find(name) != ctx->externFunctions.end()) {
                 auto nextTag = ctx->lexer.peek().tag;
                 if (nextTag == Token::LParens) {
                     return FunctionCallAST::parse(tok, ctx);
                 } else if (nextTag == Token::Eq) {
                     return LetAST::parse(tok, ctx);
                 }
-            } else if (ctx->namedVariables.find(val) != ctx->namedVariables.end()) {
+            } else if (ctx->isNamedVariable(tok)) {
                 return LetAST::parse(tok, ctx);
             }
         }
@@ -134,12 +156,8 @@ void BlockAST::addStatement(std::unique_ptr<ExprAST> statement) {
 
 std::unique_ptr<ProtoDefAST> makeGosubProto(const LabelAST* label) {
     std::vector<ProtoDefAST::Argument> args;
-    return std::make_unique<ProtoDefAST>(label->token(),
-                                         label->ctx(),
-                                         boost::get<std::string>(label->token().value),
-                                         std::move(args),
-                                         false,
-                                         Void);
+    return std::make_unique<ProtoDefAST>(
+        label->token(), label->ctx(), label->token().strValue, std::move(args), false, Void);
 }
 
 std::unique_ptr<FunctionCallAST> makeGosubCall(const Token& tok,
@@ -252,6 +270,7 @@ OperatorInfo::Handle OperatorInfo::get(const Token& tok) {
 
 std::unique_ptr<ExprAST> parsePrimary(const Token& tok, BasicContext* ctx) {
     switch (tok.tag) {
+        case Token::Variable:
         case Token::String: {
             auto nextTok = ctx->lexer.peek();
             auto nextTag = nextTok.tag;
@@ -325,7 +344,8 @@ std::unique_ptr<ExprAST> StringAST::parse(const Token& tok, BasicContext* ctx) {
 }
 
 std::unique_ptr<ExprAST> VariableExprAST::parse(const Token& tok, BasicContext* ctx) {
-    const auto& variableName = boost::get<std::string>(tok.value);
+    std::string variableName(ctx->makeVariableName(tok));
+
     if (ctx->namedVariables.find(variableName) == ctx->namedVariables.end()) {
         throw ParseException("Could not find variable");
     }
@@ -334,7 +354,7 @@ std::unique_ptr<ExprAST> VariableExprAST::parse(const Token& tok, BasicContext* 
 
 std::unique_ptr<ExprAST> LabelAST::parse(const Token& tok, BasicContext* ctx) {
     bool inserted = false;
-    const auto& labelName = boost::get<std::string>(tok.value);
+    const auto& labelName = tok.strValue;
     decltype(ctx->labels)::iterator it;
 
     std::tie(it, inserted) = ctx->labels.emplace(labelName, nullptr);
@@ -407,22 +427,15 @@ std::unique_ptr<ExprAST> LetAST::parse(const Token& tok, BasicContext* ctx, bool
     if (tok.tag == Token::Let) {
         nameTok = ctx->lexer.lex();
     }
-    if (nameTok.tag != Token::String) {
+    if (nameTok.tag != Token::String && nameTok.tag != Token::Variable) {
         throw AssignException(AssignException::NotString);
     }
 
-    auto maybeTypeAnnotation = ctx->lexer.lex();
-    VariableType type = Void;
-    if (maybeTypeAnnotation.tag == Token::Dollar) {
-        type = String;
-    } else if (maybeTypeAnnotation.tag == Token::Pound) {
-        type = Double;
-    } else {
+    VariableType type;
+    auto name = ctx->makeVariableName(nameTok, &type);
+    if (type == Void) {
         type = Integer;
-        ctx->lexer.putBack(maybeTypeAnnotation);
     }
-
-    const auto& name = boost::get<std::string>(nameTok.value);
 
     if (ctx->lexer.lex().tag != Token::Eq) {
         throw AssignException(AssignException::NoEquals);
@@ -439,7 +452,7 @@ std::string lexString(Lexer* lexer) {
     auto labelTok = lexer->lex();
     std::string gotoName;
     if (labelTok.tag == Token::String) {
-        gotoName = boost::get<std::string>(labelTok.value);
+        gotoName = labelTok.strValue;
     } else if (labelTok.tag == Token::Double) {
         std::stringstream ss;
         ss << boost::get<double>(labelTok.value);
@@ -516,7 +529,7 @@ std::unique_ptr<ExprAST> ForAST::parse(const Token& tok, BasicContext* ctx) {
 }
 
 std::unique_ptr<ExprAST> FunctionCallAST::parse(const Token& tok, BasicContext* ctx) {
-    const auto& functionName = boost::get<std::string>(tok.value);
+    const auto& functionName = tok.strValue;
     static const std::unordered_set<std::string> noParensFunctions = {"PRINT", "INPUT"};
     bool needsParens = noParensFunctions.find(functionName) == noParensFunctions.end();
 
@@ -551,24 +564,18 @@ std::unique_ptr<ExprAST> FunctionCallAST::parse(const Token& tok, BasicContext* 
 std::unique_ptr<ExprAST> ProtoDefAST::parse(const Token& tok, BasicContext* ctx) {
     auto nameTok = ctx->lexer.lex();
     if (nameTok.tag != Token::String && nameTok.tag != Token::Print &&
-        nameTok.tag != Token::Input) {
+        nameTok.tag != Token::Input && nameTok.tag != Token::Variable) {
         throw ParseException("Expected function name");
     }
 
     VariableType returnType = Void;
+    std::string name;
     if (tok.tag == Token::Function || tok.tag == Token::Extern) {
-        auto maybeTypeAnnotation = ctx->lexer.peek().tag;
-        returnType = Double;
-
-        if (maybeTypeAnnotation == Token::Dollar) {
-            returnType = String;
-            ctx->lexer.lex();
-        } else if (maybeTypeAnnotation == Token::Pound) {
-            ctx->lexer.lex();
-        }
+        name = ctx->makeVariableName(nameTok, &returnType);
+    } else {
+        name = nameTok.strValue;
     }
 
-    const auto& name = boost::get<std::string>(nameTok.value);
     if (ctx->lexer.lex().tag != Token::LParens) {
         throw ParseException("Expected LParens to start argument list of extern def");
     }
@@ -603,7 +610,7 @@ std::unique_ptr<ExprAST> ProtoDefAST::parse(const Token& tok, BasicContext* ctx)
             throw ParseException("Unknown type for argument in extern def");
         }
 
-        args.emplace_back(type, boost::get<std::string>(argNameTok.value));
+        args.emplace_back(type, argNameTok.strValue);
 
         lastToken = ctx->lexer.lex();
     } while (lastToken.tag == Token::Comma);
@@ -612,8 +619,7 @@ std::unique_ptr<ExprAST> ProtoDefAST::parse(const Token& tok, BasicContext* ctx)
         throw ParseException("Expected closing RParens in extern def");
     }
 
-    auto ret = std::make_unique<ProtoDefAST>(
-        tok, ctx, std::move(name), std::move(args), isVarArg, returnType);
+    auto ret = std::make_unique<ProtoDefAST>(tok, ctx, name, std::move(args), isVarArg, returnType);
     bool inserted;
     std::tie(std::ignore, inserted) = ctx->externFunctions.emplace(name, ret.get());
     if (!inserted) {

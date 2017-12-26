@@ -22,6 +22,7 @@ struct Token {
         As,
         Sub,
         Function,
+        Variable,
 
         StringType,
         DoubleType,
@@ -61,16 +62,15 @@ struct Token {
         LParens,
         RParens,
 
-        Dollar,
-        Percent,
-        Pound,
-
         MaxTag
     };
 
     Token() = default;
     explicit Token(Tag value) : tag(value) {}
-    template <typename T>
+    explicit Token(Tag value, std::string extra) : tag(value), strValue(std::move(extra)) {}
+    template <typename T,
+              typename = std::enable_if_t<!std::is_same<T, std::string>::value &&
+                                          !std::is_same<T, const char*>::value>>
     explicit Token(Tag value, T extra) : tag(value), value(std::move(extra)) {}
 
     bool isEnding() const {
@@ -82,7 +82,8 @@ struct Token {
     }
 
     Tag tag = MaxTag;
-    boost::variant<std::string, int64_t, double, char> value;
+    boost::variant<int64_t, double, char> value;
+    std::string strValue;
 };
 
 std::ostream& operator<<(std::ostream& stream, const Token& token);

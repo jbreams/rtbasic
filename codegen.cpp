@@ -57,12 +57,12 @@ llvm::Value* StatementAST::codegen() {
 }
 
 const std::string& LabelAST::name() const {
-    return boost::get<std::string>(token().value);
+    return token().strValue;
 }
 
 llvm::Value* LabelAST::value() {
     if (!_value) {
-        _value = llvm::BasicBlock::Create(ctx()->context, boost::get<std::string>(token().value));
+        _value = llvm::BasicBlock::Create(ctx()->context, token().strValue);
     }
     return _value;
 }
@@ -76,12 +76,12 @@ llvm::Value* LabelAST::codegen() {
 
     auto curBB = builder.GetInsertBlock();
     auto newBB = static_cast<llvm::BasicBlock*>(value());
+    ctx()->getCurrentFunction()->getBasicBlockList().insertAfter(curBB->getIterator(), newBB);
 
     if (curBB && !curBB->getTerminator()) {
         builder.CreateBr(newBB);
     }
 
-    ctx()->getCurrentFunction()->getBasicBlockList().insertAfter(curBB->getIterator(), newBB);
     builder.SetInsertPoint(newBB);
     return _value;
 }
@@ -120,12 +120,11 @@ llvm::Value* NumberExprAST::codegen() {
 }
 
 llvm::Value* StringAST::codegen() {
-    const std::string& value = boost::get<std::string>(token().value);
-    return ctx()->builder.CreateGlobalStringPtr(value);
+    return ctx()->builder.CreateGlobalStringPtr(token().strValue);
 }
 
 llvm::Value* VariableExprAST::codegen() {
-    auto name = boost::get<std::string>(token().value);
+    auto name = token().strValue;
     auto it = ctx()->namedVariables.find(name);
     if (it == ctx()->namedVariables.end()) {
         auto global = ctx()->module->getGlobalVariable(name);
@@ -182,9 +181,9 @@ llvm::Value* LetAST::codegen() {
         }
 
         if (_type == Double && initV->getType() != ctx()->builder.getDoubleTy()) {
-            initV = ctx()->builder.CreateFPCast(initV, ctx()->builder.getDoubleTy());
+            initV = ctx()->builder.CreateIntCast(initV, ctx()->builder.getDoubleTy(), true);
         } else if (_type == Integer && initV->getType() != ctx()->builder.getInt64Ty()) {
-            initV = ctx()->builder.CreateIntCast(initV, ctx()->builder.getInt64Ty(), true);
+            initV = ctx()->builder.CreateFPCast(initV, ctx()->builder.getInt64Ty());
         }
         if (!initV) {
             std::cerr << "Error casting initial value for let variable" << std::endl;
@@ -357,7 +356,6 @@ llvm::Value* ReturnAST::codegen() {
 
 llvm::Value* ForAST::codegen() {
     auto& builder = ctx()->builder;
-    auto curFunction = ctx()->getCurrentFunction();
     auto controlVar = static_cast<LetAST*>(_controlVar.get());
 
     if (!controlVar->codegen()) {
@@ -366,15 +364,36 @@ llvm::Value* ForAST::codegen() {
     }
     auto controlVarIsInt = controlVar->allocaInst()->getAllocatedType()->isIntegerTy();
 
-    auto loopBB = llvm::BasicBlock::Create(ctx()->context, "loop", curFunction);
+    auto loopBB = llvm::BasicBlock::Create(ctx()->context, "loop");
+
     builder.CreateBr(loopBB);
+    ctx()->getCurrentFunction()->getBasicBlockList().push_back(loopBB);
     builder.SetInsertPoint(loopBB);
+
+    auto endV = _toExpr->codegen();
+    if (!endV) {
+        std::cerr << "Error generating end condition for for loop" << std::endl;
+        return nullptr;
+    }
+
+    auto curVar = builder.CreateLoad(controlVar->allocaInst());
+    if (controlVarIsInt) {
+        endV = builder.CreateICmpSLT(curVar, endV, "loopcond");
+    } else {
+        endV = builder.CreateFCmpOLT(curVar, endV, "loopcond");
+    }
+
+    auto bodyBB = llvm::BasicBlock::Create(ctx()->context, "loopbody", ctx()->getCurrentFunction());
+    auto afterBB = llvm::BasicBlock::Create(ctx()->context, "afterloop");
+    builder.CreateCondBr(endV, bodyBB, afterBB);
+    builder.SetInsertPoint(bodyBB);
 
     if (!_bodyExpr->codegen()) {
         std::cerr << "Error generating for loop body" << std::endl;
         return nullptr;
     }
 
+    curVar = builder.CreateLoad(controlVar->allocaInst());
     llvm::Value* stepV = nullptr;
     if (_stepExpr) {
         stepV = _stepExpr->codegen();
@@ -390,13 +409,6 @@ llvm::Value* ForAST::codegen() {
         }
     }
 
-    auto endV = _toExpr->codegen();
-    if (!endV) {
-        std::cerr << "Error generating end condition for for loop" << std::endl;
-        return nullptr;
-    }
-
-    auto curVar = builder.CreateLoad(controlVar->allocaInst());
     llvm::Value* nextVar;
     if (controlVarIsInt) {
         nextVar = builder.CreateAdd(curVar, stepV, "nextvar");
@@ -404,15 +416,9 @@ llvm::Value* ForAST::codegen() {
         nextVar = builder.CreateFAdd(curVar, stepV, "nextvar");
     }
     builder.CreateStore(nextVar, controlVar->allocaInst());
+    builder.CreateBr(loopBB);
 
-    if (controlVarIsInt) {
-        endV = builder.CreateICmpEQ(endV, nextVar, "loopcond");
-    } else {
-        endV = builder.CreateFCmpONE(endV, nextVar, "loopcond");
-    }
-
-    auto afterBB = llvm::BasicBlock::Create(ctx()->context, "afterloop", curFunction);
-    builder.CreateCondBr(endV, loopBB, afterBB);
+    ctx()->getCurrentFunction()->getBasicBlockList().push_back(afterBB);
     builder.SetInsertPoint(afterBB);
 
     return llvm::Constant::getNullValue(llvm::Type::getDoubleTy(ctx()->context));

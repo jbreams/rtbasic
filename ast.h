@@ -28,6 +28,13 @@ struct LabelInfo {
     LabelAST* label = nullptr;
 };
 
+enum VariableType {
+    Double,
+    Integer,
+    String,
+    Void  // There are no void variables, but SUB's return void
+};
+
 struct BasicContext {
     BasicContext(Lexer lexer, std::string fileName, std::string mainName = "main")
         : lexer(std::move(lexer)),
@@ -51,17 +58,12 @@ struct BasicContext {
     FunctionAST* currentFunction = nullptr;
 
     bool codegenAllProtos();
+    bool isNamedVariable(const Token& tok);
+    std::string makeVariableName(const Token& tok, VariableType* typeOut = nullptr);
 
     std::unordered_map<std::string, ProtoDefAST*> externFunctions;
     std::unordered_map<std::string, LabelInfo> labels;
     std::unordered_map<std::string, llvm::AllocaInst*> namedVariables;
-};
-
-enum VariableType {
-    Double,
-    Integer,
-    String,
-    Void  // There are no void variables, but SUB's return void
 };
 
 class ParseException : public std::exception {
@@ -232,6 +234,9 @@ public:
 
     llvm::Value* codegen() override;
     static std::unique_ptr<ExprAST> parse(const Token& tok,
+                                          BasicContext* ctx,
+                                          bool maybeGlobal = true);
+    static std::unique_ptr<ExprAST> parse(std::string name,
                                           BasicContext* ctx,
                                           bool maybeGlobal = true);
 

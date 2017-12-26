@@ -50,8 +50,6 @@ const CharToTagMap& charToTagMap() {
         {',', Token::Comma},
         {'(', Token::LParens},
         {')', Token::RParens},
-        {'$', Token::Dollar},
-        {'#', Token::Pound},
     };
     return _charToTag;
 }
@@ -280,6 +278,9 @@ Token Lexer::_lex() {
         if (isFirstToken && _line[_pos] == ':') {
             _pos++;
             return Token(Token::Label, token);
+        } else if (_line[_pos] == '#' || _line[_pos] == '$' || _line[_pos] == '%') {
+            token += _line[_pos++];
+            return Token(Token::Variable, token);
         }
 
         auto it = stringToTag.find(token);
