@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
         return 1;
 
     llvm::raw_os_ostream errStream(std::cerr);
-    if (llvm::verifyModule(*ctx.module, &errStream))
+    if (opts.verifyModule && llvm::verifyModule(*ctx.module, &errStream))
         return 1;
 
     std::unique_ptr<llvm::raw_fd_ostream> output;

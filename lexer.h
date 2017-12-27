@@ -23,7 +23,9 @@ struct Token {
         Sub,
         Function,
         Variable,
+        Dim,
 
+        IntegerType,
         StringType,
         DoubleType,
 

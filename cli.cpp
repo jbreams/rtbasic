@@ -30,13 +30,19 @@ Options Options::parseOptions(int argc, char** argv) {
         llvm::cl::cat(CompilerCategory),
         llvm::cl::init(ObjectCode));
 
+    static llvm::cl::opt<bool> verifyModule(
+        "verify",
+        llvm::cl::desc("Run verification on module before writing output"),
+        llvm::cl::cat(CompilerCategory),
+        llvm::cl::init(true));
+
     llvm::cl::HideUnrelatedOptions(CompilerCategory);
 
     llvm::cl::ParseCommandLineOptions(argc, argv);
 
-
     return Options{inputFilename.getValue(),
                    outputFilename.getValue(),
                    mainFunctionName.getValue(),
-                   outputType.getValue()};
+                   outputType.getValue(),
+                   verifyModule.getValue()};
 }

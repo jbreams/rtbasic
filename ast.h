@@ -256,6 +256,34 @@ private:
     llvm::AllocaInst* _alloca;
 };
 
+class DimAST : public ExprAST {
+public:
+    DimAST(Token tok,
+           BasicContext* ctx,
+           std::string name,
+           VariableType type,
+           std::vector<int> dimensions,
+           bool global)
+        : ExprAST(std::move(tok), ctx),
+          _name(std::move(name)),
+          _type(type),
+          _dimensions(std::move(dimensions)),
+          _global(global) {}
+
+    llvm::Value* codegen() override;
+    static std::unique_ptr<ExprAST> parse(const Token& tok, BasicContext* ctx);
+
+    llvm::AllocaInst* allocaInst() const;
+    const std::string& name() const;
+
+private:
+    std::string _name;
+    VariableType _type;
+    std::vector<int> _dimensions;
+    bool _global;
+    llvm::AllocaInst* _alloca;
+};
+
 class BinaryExprAST : public ExprAST {
 public:
     BinaryExprAST(Token tok,

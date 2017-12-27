@@ -12,5 +12,6 @@ struct Options {
         ObjectCode,
     };
     OutputType outputType;
+    bool verifyModule;
     static Options parseOptions(int argc, char** argv);
 };

@@ -44,11 +44,11 @@ bool BasicContext::codegenAllProtos() {
     return true;
 }
 
-llvm::Value* makeLiteralDouble(BasicContext* ctx, double val) {
+llvm::Constant* makeLiteralDouble(BasicContext* ctx, double val) {
     return llvm::ConstantFP::get(ctx->context, llvm::APFloat(val));
 }
 
-llvm::Value* makeLiteralInteger(BasicContext* ctx, int64_t val) {
+llvm::Constant* makeLiteralInteger(BasicContext* ctx, int64_t val) {
     return llvm::ConstantInt::getSigned(ctx->builder.getInt64Ty(), val);
 }
 
@@ -138,6 +138,62 @@ llvm::Value* VariableExprAST::codegen() {
 
     auto& builder = ctx()->builder;
     return builder.CreateLoad(it->second, it->first);
+}
+
+llvm::Value* DimAST::codegen() {
+    auto& builder = ctx()->builder;
+
+    int numElements = 0;
+    for (auto dimensions : _dimensions) {
+        numElements += dimensions + 1;
+    }
+
+    llvm::Constant* initV;
+    llvm::Type* type = nullptr;
+    if (_type == Double) {
+        initV = makeLiteralDouble(ctx(), 0.0);
+        type = builder.getDoubleTy();
+    } else if (_type == Integer) {
+        initV = makeLiteralInteger(ctx(), 0);
+        type = builder.getInt64Ty();
+    } else if (_type == String) {
+        initV = llvm::ConstantPointerNull::get(llvm::Type::getInt8PtrTy(ctx()->context));
+        type = builder.getInt8PtrTy();
+    } else {
+        std::cerr << "Cannot find initial value for variable " << _name << std::endl;
+        return nullptr;
+    }
+
+    if (numElements > 0) {
+        type = llvm::ArrayType::get(type, numElements);
+        initV = llvm::ConstantAggregateZero::get(type);
+    }
+
+    if (_global) {
+        auto globalPtr = ctx()->module->getOrInsertGlobal(_name, type);
+        auto global = ctx()->module->getGlobalVariable(_name);
+        if (!global->hasInitializer()) {
+            global->setInitializer(initV);
+            global->setLinkage(llvm::GlobalValue::CommonLinkage);
+        }
+
+        return globalPtr;
+    }
+
+    auto alloc = CreateEntryBlockAlloca(ctx(), _name, type);
+
+    _alloca = alloc;
+    ctx()->namedVariables[_name] = alloc;
+
+    return alloc;
+}
+
+const std::string& DimAST::name() const {
+    return _name;
+}
+
+llvm::AllocaInst* DimAST::allocaInst() const {
+    return _alloca;
 }
 
 llvm::Value* LetAST::codegen() {
@@ -342,7 +398,9 @@ llvm::Value* GotoAST::codegen() {
         return nullptr;
     }
     builder.CreateBr(static_cast<llvm::BasicBlock*>(labelIt->second.label->value()));
-    return llvm::ConstantFP::get(builder.getDoubleTy(), 0);
+    auto newBB = llvm::BasicBlock::Create(ctx()->context, "afterGoto", ctx()->getCurrentFunction());
+    builder.SetInsertPoint(newBB);
+    return newBB;
 }
 
 llvm::Value* GosubAST::codegen() {

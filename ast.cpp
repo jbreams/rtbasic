@@ -132,6 +132,8 @@ std::unique_ptr<ExprAST> StatementAST::parse(const Token& tok, BasicContext* ctx
             }
         case Token::Let:
             return LetAST::parse(tok, ctx);
+        case Token::Dim:
+            return DimAST::parse(tok, ctx);
         case Token::String: {
             const auto& name = tok.strValue;
             if (ctx->externFunctions.find(name) != ctx->externFunctions.end()) {
@@ -448,6 +450,56 @@ std::unique_ptr<ExprAST> LetAST::parse(const Token& tok, BasicContext* ctx, bool
     return std::make_unique<LetAST>(tok, ctx, name, type, std::move(value), global);
 }
 
+std::unique_ptr<ExprAST> DimAST::parse(const Token& tok, BasicContext* ctx) {
+    Token nameTok = ctx->lexer.lex();
+    if (nameTok.tag != Token::String && nameTok.tag != Token::Variable) {
+        throw AssignException(AssignException::NotString);
+    }
+
+    auto nextTok = ctx->lexer.lex();
+    std::vector<int> dimensions;
+    VariableType type = Integer;
+    if (nextTok.tag == Token::LParens) {
+        nextTok = ctx->lexer.lex();
+        while (nextTok.tag != Token::RParens) {
+            if (nextTok.tag == Token::Integer) {
+                dimensions.push_back(boost::get<int64_t>(nextTok.value));
+            } else if (nextTok.tag == Token::Comma) {
+                nextTok = ctx->lexer.lex();
+            } else {
+                throw ParseException("Invalid token while parsing dimensions list");
+            }
+            nextTok = ctx->lexer.lex();
+        }
+
+        // Consume the RParens
+        nextTok = ctx->lexer.lex();
+    }
+
+    if (nextTok.tag == Token::As) {
+        nextTok = ctx->lexer.lex();
+        switch (nextTok.tag) {
+            case Token::IntegerType:
+                type = Integer;
+                break;
+            case Token::StringType:
+                type = String;
+                break;
+            case Token::DoubleType:
+                type = Double;
+                break;
+            default:
+                throw ParseException("Invalid token while parsing variable type");
+        }
+    } else {
+        ctx->lexer.putBack(nextTok);
+    }
+    bool global = (ctx->currentFunction == nullptr);
+
+    return std::make_unique<DimAST>(
+        tok, ctx, nameTok.strValue, type, std::move(dimensions), global);
+}
+
 std::string lexString(Lexer* lexer) {
     auto labelTok = lexer->lex();
     std::string gotoName;
@@ -606,6 +658,8 @@ std::unique_ptr<ExprAST> ProtoDefAST::parse(const Token& tok, BasicContext* ctx)
             type = Double;
         } else if (argTypeTok.tag == Token::StringType) {
             type = String;
+        } else if (argTypeTok.tag == Token::IntegerType) {
+            type = Integer;
         } else {
             throw ParseException("Unknown type for argument in extern def");
         }
