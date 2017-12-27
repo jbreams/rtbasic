@@ -5,6 +5,7 @@
 #include <stack>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
@@ -17,6 +18,7 @@ class LabelAST;
 struct BasicContext;
 class ProtoDefAST;
 class FunctionAST;
+class VariableDeclartionAST;
 
 struct LabelInfo {
     explicit LabelInfo(int initialGotos) : gotos(initialGotos) {}
@@ -63,7 +65,7 @@ struct BasicContext {
 
     std::unordered_map<std::string, ProtoDefAST*> externFunctions;
     std::unordered_map<std::string, LabelInfo> labels;
-    std::unordered_map<std::string, llvm::AllocaInst*> namedVariables;
+    std::unordered_map<std::string, VariableDeclartionAST*> namedVariables;
 };
 
 class ParseException : public std::exception {
@@ -212,22 +214,49 @@ public:
 
 class VariableExprAST : public ExprAST {
 public:
-    VariableExprAST(Token tok, BasicContext* ctx) : ExprAST(std::move(tok), ctx) {}
+    VariableExprAST(Token tok,
+                    BasicContext* ctx,
+                    std::string name,
+                    std::vector<std::unique_ptr<ExprAST>> dimensions)
+        : ExprAST(std::move(tok), ctx),
+          _name(std::move(name)),
+          _dimensions(std::move(dimensions)) {}
 
     llvm::Value* codegen() override;
+    llvm::Value* codegenLookup();
     static std::unique_ptr<ExprAST> parse(const Token& tok, BasicContext* ctx);
+
+private:
+    std::string _name;
+    std::vector<std::unique_ptr<ExprAST>> _dimensions;
 };
 
-class LetAST : public ExprAST {
+class VariableDeclartionAST : public ExprAST {
+public:
+    VariableDeclartionAST(Token tok, BasicContext* ctx) : ExprAST(std::move(tok), ctx) {}
+
+    virtual llvm::Value* allocaInst() const = 0;
+    virtual llvm::Type* nativeType() const = 0;
+    virtual const std::string& name() const = 0;
+    virtual bool isGlobal() const = 0;
+    virtual const std::vector<int>& dimensions() const {
+        static std::vector<int> ret;
+        return ret;
+    }
+};
+
+class LetAST : public VariableDeclartionAST {
 public:
     LetAST(Token tok,
            BasicContext* ctx,
            std::string name,
            VariableType type,
+           std::unique_ptr<VariableExprAST> variableExpr,
            std::unique_ptr<ExprAST> value,
            bool global)
-        : ExprAST(std::move(tok), ctx),
+        : VariableDeclartionAST(std::move(tok), ctx),
           _name(std::move(name)),
+          _variableExpr(std::move(variableExpr)),
           _value(std::move(value)),
           _type(type),
           _global(global) {}
@@ -240,23 +269,27 @@ public:
                                           BasicContext* ctx,
                                           bool maybeGlobal = true);
 
-    llvm::AllocaInst* allocaInst() const {
-        return _alloca;
+    llvm::Value* allocaInst() const override;
+    llvm::Type* nativeType() const override;
+
+    const std::string& name() const override {
+        return _name;
     }
 
-    const std::string& name() const {
-        return _name;
+    bool isGlobal() const override {
+        return _global;
     }
 
 private:
     std::string _name;
+    std::unique_ptr<VariableExprAST> _variableExpr;
     std::unique_ptr<ExprAST> _value;
     VariableType _type;
     bool _global;
     llvm::AllocaInst* _alloca;
 };
 
-class DimAST : public ExprAST {
+class DimAST : public VariableDeclartionAST {
 public:
     DimAST(Token tok,
            BasicContext* ctx,
@@ -264,7 +297,7 @@ public:
            VariableType type,
            std::vector<int> dimensions,
            bool global)
-        : ExprAST(std::move(tok), ctx),
+        : VariableDeclartionAST(std::move(tok), ctx),
           _name(std::move(name)),
           _type(type),
           _dimensions(std::move(dimensions)),
@@ -273,8 +306,15 @@ public:
     llvm::Value* codegen() override;
     static std::unique_ptr<ExprAST> parse(const Token& tok, BasicContext* ctx);
 
-    llvm::AllocaInst* allocaInst() const;
-    const std::string& name() const;
+    llvm::Value* allocaInst() const override;
+    llvm::Type* nativeType() const override;
+    const std::string& name() const override;
+    const std::vector<int>& dimensions() const override {
+        return _dimensions;
+    }
+    bool isGlobal() const override {
+        return _global;
+    }
 
 private:
     std::string _name;
@@ -427,11 +467,30 @@ private:
 
 class ProtoDefAST : public ExprAST {
 public:
-    struct Argument {
-        Argument(VariableType t, std::string n) : name(std::move(n)), type(t) {}
+    class Argument : public VariableDeclartionAST {
+    public:
+        Argument(Token tok, BasicContext* ctx, VariableType t, std::string n)
+            : VariableDeclartionAST(std::move(tok), ctx), type(t), _name(std::move(n)) {}
 
-        std::string name;
-        VariableType type;
+        const VariableType type;
+
+        llvm::Value* codegen() override;
+        llvm::Value* allocaInst() const override {
+            return _alloca;
+        }
+
+        const std::string& name() const override {
+            return _name;
+        }
+
+        bool isGlobal() const override {
+            return false;
+        }
+        llvm::Type* nativeType() const;
+
+    private:
+        std::string _name;
+        llvm::AllocaInst* _alloca;
     };
 
     ProtoDefAST(Token tok,
@@ -451,7 +510,7 @@ public:
         return _name;
     }
 
-    const std::vector<Argument>& args() const {
+    std::vector<Argument>& args() {
         return _args;
     }
 

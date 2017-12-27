@@ -57,6 +57,7 @@ int main(int argc, char** argv) {
     BasicContext ctx(std::move(lexer), opts.inputFilename, opts.mainFunctionName);
 
     auto programBody = BlockAST::parse(ctx.lexer.lex(), &ctx, {Token::End}, true);
+    ctx.namedVariables.clear();
 
     auto target = buildTargetMachine();
     if (!target)
