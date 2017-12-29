@@ -7,6 +7,15 @@
 
 #include "lexer.h"
 
+Token::Token(Lexer* lexer, Tag value, std::string strValue, Token::NumValue numValue)
+    : tag(value),
+      value(std::move(numValue)),
+      strValue(std::move(strValue)),
+      line(lexer->_line),
+      startPos(lexer->_lastPos),
+      endPos(lexer->_pos),
+      lineNumber(lexer->_lineCount) {}
+
 using StringToTagMap = std::unordered_map<std::string, Token::Tag>;
 const StringToTagMap& stringToTagMap() {
     static const StringToTagMap _stringToTag = {
@@ -45,29 +54,38 @@ const CharToTagMap& charToTagMap() {
 }
 
 std::ostream& operator<<(std::ostream& stream, const Token& tok) {
-    if (tok.value.empty()) {
-        stream << "Token tag: " << tok.tag;
+    if (!tok.strValue.empty()) {
+        stream << "Tag: " << tok.tag << " value: \"" << tok.strValue << "\"";
+    } else if (tok.value.empty()) {
+        stream << "Tag: " << tok.tag;
         if (tok.tag == Token::Eof) {
-            stream << " Eof";
+            stream << " value: Eof";
         } else if (tok.tag == Token::Newline) {
-            stream << " Newline";
+            stream << " value: Newline";
         }
     } else {
-        stream << "Token tag: " << tok.tag << " value: " << tok.value;
+        stream << "Tag: " << tok.tag << " value: " << tok.value;
     }
+
+    auto prefix = tok.line->substr(0, tok.startPos);
+    auto token = tok.line->substr(tok.startPos, tok.endPos - tok.startPos);
+    auto suffix = tok.line->substr(tok.endPos);
+
+    stream << " Occurred on line " << tok.lineNumber << ": \"" << prefix << "\" --> \"" << token
+           << "\" <-- \"" << suffix << "\"";
     return stream;
 }
 
 LexerError::LexerError(Lexer* lexer, const char* message) {
     std::stringstream ss;
     ss << message << " (error at " << lexer->_lineCount << ":" << lexer->_pos << ": \""
-       << lexer->_line.substr(0, lexer->_pos) << "\" -> \"" << lexer->_line.substr(lexer->_pos)
+       << lexer->_line->substr(0, lexer->_pos) << "\" -> \"" << lexer->_line->substr(lexer->_pos)
        << "\")";
     _message = ss.str();
 }
 
 Token Lexer::_extractNumber() {
-    auto ptr = _line.c_str() + _pos;
+    auto ptr = _line->c_str() + _pos;
     char* endPtr = nullptr;
     int64_t intVal = 0;
     double intPart;
@@ -84,14 +102,14 @@ Token Lexer::_extractNumber() {
     _pos = (endPtr - ptr) + _pos;
 
     if (isDouble) {
-        return Token(Token::Double, dblVal);
+        return Token(this, Token::Double, dblVal);
     } else {
-        return Token(Token::Integer, intVal);
+        return Token(this, Token::Integer, intVal);
     }
 }
 
 long Lexer::_extractInt(int base) {
-    auto ptr = _line.c_str() + _pos;
+    auto ptr = _line->c_str() + _pos;
     char* endPtr = nullptr;
     double val = std::strtol(ptr, &endPtr, base);
     _pos = (endPtr - ptr) + _pos;
@@ -105,9 +123,9 @@ std::string Lexer::_extractEscapedString(char endAt) {
     char prev;
 
     do {
-        prev = _line[_pos++];
+        prev = _line->at(_pos++);
         if (prev == '\\') {
-            auto escape = _line[_pos++];
+            auto escape = _line->at(_pos++);
             switch (escape) {
                 case 't':
                     ss << '\t';
@@ -183,25 +201,30 @@ Token Lexer::_lex() {
 
     auto& stringToTag = stringToTagMap();
     auto& charToTag = charToTagMap();
+    auto& line = *_line;
 
-    while (!_stream->eof() && _line.empty()) {
-        std::getline(*_stream, _line);
+    while (!_stream->eof() && _line->empty()) {
+        _line = std::make_shared<std::string>();
+        std::getline(*_stream, *_line);
+        line = *_line;
         _lineCount++;
         _pos = 0;
         _seenToken = false;
     }
 
     if (_stream->eof()) {
-        return Token(Token::Eof);
+        return Token(this, Token::Eof);
     }
 
-    while (std::isspace(_line[_pos])) {
+    while (_pos < _line->size() && std::isspace(_line->at(_pos))) {
         _pos++;
     };
 
-    if (_pos == _line.size()) {
-        _line.clear();
-        return Token(Token::Newline);
+    _lastPos = _pos;
+    if (_pos == _line->size()) {
+        Token ret(this, Token::Newline);
+        _line = std::make_shared<std::string>();
+        return ret;
     }
 
     bool isFirstToken = [this] {
@@ -210,74 +233,74 @@ Token Lexer::_lex() {
         return old == false;
     }();
 
-    auto charIt = charToTag.find(_line[_pos]);
+    auto charIt = charToTag.find(line[_pos]);
     if (charIt != charToTag.end()) {
-        if (charIt->second == Token::Minus && std::isdigit(_line[_pos + 1])) {
+        if (charIt->second == Token::Minus && std::isdigit(line[_pos + 1])) {
             return _extractNumber();
         } else if (charIt->second == Token::Gt) {
-            auto nextChar = _line[++_pos];
+            auto nextChar = line[++_pos];
             if (nextChar == '=') {
-                return Token(Token::Gte, ">=");
+                return Token(this, Token::Gte, ">=");
             } else if (nextChar == '<') {
-                return Token(Token::Neq, "><");
+                return Token(this, Token::Neq, "><");
             } else {
-                return Token(charIt->second, charIt->first);
+                return Token(this, charIt->second, charIt->first);
             }
         } else if (charIt->second == Token::Lt) {
-            auto nextChar = _line[++_pos];
+            auto nextChar = line[++_pos];
             if (nextChar == '=') {
-                return Token(Token::Lte, "<=");
+                return Token(this, Token::Lte, "<=");
             } else if (nextChar == '>') {
-                return Token(Token::Neq, "<>");
+                return Token(this, Token::Neq, "<>");
             } else {
-                return Token(charIt->second, charIt->first);
+                return Token(this, charIt->second, charIt->first);
             }
         } else {
-            return Token(charIt->second, _line[_pos++]);
+            return Token(this, charIt->second, line[_pos++]);
         }
-    } else if (std::isdigit(_line[_pos])) {
+    } else if (std::isdigit(line[_pos])) {
         if (isFirstToken) {  // The first token seen on a line (that's a number) is a line label
             std::stringstream ss;
             ss << _extractInt();
-            return Token(Token::Label, ss.str());
+            return Token(this, Token::Label, ss.str());
         }
         return _extractNumber();
-    } else if (_line[_pos] == '\"') {
-        return Token(Token::EscapedString, _extractEscapedString('\"'));
-    } else if (_line[_pos] == '.') {
-        auto ellipsis = _line.substr(_pos, 3);
+    } else if (line[_pos] == '\"') {
+        return Token(this, Token::EscapedString, _extractEscapedString('\"'));
+    } else if (line[_pos] == '.') {
+        auto ellipsis = line.substr(_pos, 3);
         if (ellipsis == "...") {
             _pos += 3;
-            return Token(Token::Ellipsis, ellipsis);
+            return Token(this, Token::Ellipsis, ellipsis);
         } else {
             throw LexerError(this, "Expected ellipsis");
         }
-    } else if (std::isalpha(_line[_pos])) {
+    } else if (std::isalpha(line[_pos])) {
         auto start = _pos;
-        while (_pos < _line.size() && std::isalpha(_line[_pos])) {
+        while (_pos < line.size() && std::isalpha(line[_pos])) {
             _pos++;
         }
 
-        auto token = _line.substr(start, _pos - start);
+        auto token = line.substr(start, _pos - start);
         if (token == "REM") {
-            auto end = _line.size();
-            token = _line.substr(start, end);
+            auto end = line.size();
+            token = line.substr(start, end);
             _pos = end;
-            return Token(Token::Rem, token);
+            return Token(this, Token::Rem, token);
         }
-        if (isFirstToken && _line[_pos] == ':') {
+        if (isFirstToken && line[_pos] == ':') {
             _pos++;
-            return Token(Token::Label, token);
-        } else if (_line[_pos] == '#' || _line[_pos] == '$' || _line[_pos] == '%') {
-            token += _line[_pos++];
-            return Token(Token::Variable, token);
+            return Token(this, Token::Label, token);
+        } else if (line[_pos] == '#' || line[_pos] == '$' || line[_pos] == '%') {
+            token += line[_pos++];
+            return Token(this, Token::Variable, token);
         }
 
         auto it = stringToTag.find(token);
         if (it == stringToTag.end()) {
-            return Token(Token::String, std::move(token));
+            return Token(this, Token::String, std::move(token));
         } else {
-            return Token(it->second, std::string(it->first));
+            return Token(this, it->second, std::string(it->first));
         }
     } else {
         throw LexerError(this, "Unknown input");

@@ -33,8 +33,14 @@ private:
     Reason _reason;
 };
 
+ParseException::ParseException(const Token& tok, std::string str) {
+    std::stringstream ss;
+    ss << "Error parsing: " << str << ". Token was: " << tok;
+    _str = ss.str();
+}
+
 std::unique_ptr<FunctionAST> BasicContext::makeMainFunction(std::string name) {
-    Token programToken(Token::Sub, std::string("main"));
+    Token programToken(&lexer, Token::Sub, std::string("main"));
     std::vector<ProtoDefAST::Argument> args;
 
     auto programProto =
@@ -68,9 +74,6 @@ std::unique_ptr<ExprAST> LineAST::parse(const Token& tok,
     StopCheck stopCheck(stopAt);
 
     if (curTok.tag == Token::Label) {
-        if (tok.value.which() != 0) {
-            throw ParseException("Expected line number to be a string");
-        }
         label = LabelAST::parse(tok, ctx);
         curTok = ctx->lexer.lex();
     }
@@ -88,7 +91,7 @@ std::unique_ptr<ExprAST> LineAST::parse(const Token& tok,
     // consume the new line.
     auto endTok = ctx->lexer.lex();
     if (!endTok.isEnding()) {
-        throw ParseException("Expected new line or EOF at end of line");
+        throw ParseException(endTok, "Expected new line or EOF at end of line");
     }
 
     return std::make_unique<LineAST>(tok, ctx, std::move(label), std::move(statement));
@@ -111,7 +114,7 @@ std::unique_ptr<ExprAST> StatementAST::parse(const Token& tok, BasicContext* ctx
         case Token::Gosub:
             return GosubAST::parse(tok, ctx);
         case Token::End:
-            throw ParseException("Reached END token outside of block parsing");
+            throw ParseException(tok, "Reached END token outside of block parsing");
         case Token::For:
             return ForAST::parse(tok, ctx);
         case Token::Input:
@@ -128,7 +131,7 @@ std::unique_ptr<ExprAST> StatementAST::parse(const Token& tok, BasicContext* ctx
             return FunctionAST::parse(tok, ctx);
         case Token::Variable:
             if (ctx->lexer.peek().tag != Token::Eq) {
-                throw ParseException("Expected = in variable assignment");
+                throw ParseException(tok, "Expected = in variable assignment");
             }
         case Token::Let:
             return LetAST::parse(tok, ctx);
@@ -148,7 +151,7 @@ std::unique_ptr<ExprAST> StatementAST::parse(const Token& tok, BasicContext* ctx
             }
         }
         default:
-            throw ParseException("Unknown statement type");
+            throw ParseException(tok, "Unknown statement type");
     }
 }
 
@@ -217,7 +220,7 @@ std::unique_ptr<ExprAST> BlockAST::parse(const Token& tok,
         bool inserted;
         std::tie(std::ignore, inserted) = ctx->externFunctions.emplace(proto->name(), proto.get());
         if (!inserted) {
-            throw ParseException("Gosub function being created already exists!");
+            throw ParseException(label->token(), "Gosub function being created already exists!");
         }
 
         blockLines.push_back(std::make_unique<FunctionAST>(label->token(), ctx, std::move(proto)));
@@ -287,8 +290,9 @@ std::unique_ptr<ExprAST> parsePrimary(const Token& tok, BasicContext* ctx) {
             return StringAST::parse(tok, ctx);
         case Token::LParens: {
             auto ret = ExprAST::parse(ctx->lexer.lex(), ctx);
-            if (ctx->lexer.lex().tag != Token::RParens) {
-                throw ParseException("Expected RParens");
+            auto rparens = ctx->lexer.lex();
+            if (rparens.tag != Token::RParens) {
+                throw ParseException(rparens, "Expected RParens");
             }
             return ret;
         }
@@ -379,7 +383,7 @@ std::unique_ptr<ExprAST> LabelAST::parse(const Token& tok, BasicContext* ctx) {
 
     std::tie(it, inserted) = ctx->labels.emplace(labelName, nullptr);
     if (!inserted && it->second.label) {
-        throw ParseException("Duplicate label definition");
+        throw ParseException(tok, "Duplicate label definition");
     }
 
     auto ret = std::make_unique<LabelAST>(tok, ctx);
@@ -408,7 +412,7 @@ std::unique_ptr<ExprAST> IfAST::parse(const Token& tok, BasicContext* ctx) {
                 std::make_unique<RelOpExprAST>(condToken, ctx, std::move(lhs), std::move(rhs));
             break;
         default:
-            throw ParseException("Unsupported relop");
+            throw ParseException(condToken, "Unsupported relop");
     }
 
     auto nextTok = ctx->lexer.peek();
@@ -436,7 +440,7 @@ std::unique_ptr<ExprAST> IfAST::parse(const Token& tok, BasicContext* ctx) {
             elseBody = StatementAST::parse(nextTok, ctx);
         }
     } else if (!nextTok.isEnding()) {
-        throw ParseException("Expected new statement after if/then without else");
+        throw ParseException(nextTok, "Expected new statement after if/then without else");
     }
     return std::make_unique<IfAST>(
         tok, ctx, std::move(condExpr), std::move(statementExpr), std::move(elseBody));
@@ -482,7 +486,7 @@ std::unique_ptr<ExprAST> DimAST::parse(const Token& tok, BasicContext* ctx) {
     if (nextTok.tag == Token::LParens) {
         dimensions = parseParensList<int>(ctx, [](Token tok) {
             if (tok.tag != Token::Integer) {
-                throw ParseException("Expected integer list for array dimensions");
+                throw ParseException(tok, "Expected integer list for array dimensions");
             }
             return boost::get<int64_t>(tok.value);
         });
@@ -504,7 +508,7 @@ std::unique_ptr<ExprAST> DimAST::parse(const Token& tok, BasicContext* ctx) {
                 type = Double;
                 break;
             default:
-                throw ParseException("Invalid token while parsing variable type");
+                throw ParseException(nextTok, "Invalid token while parsing variable type");
         }
     } else {
         ctx->lexer.putBack(nextTok);
@@ -563,8 +567,9 @@ std::unique_ptr<ExprAST> ReturnAST::parse(const Token& tok, BasicContext* ctx) {
 std::unique_ptr<ExprAST> ForAST::parse(const Token& tok, BasicContext* ctx) {
     auto controlVar = LetAST::parse(ctx->lexer.lex(), ctx, false);
 
-    if (ctx->lexer.lex().tag != Token::To) {
-        throw ParseException("Expected TO after FOR let statement");
+    auto toTok = ctx->lexer.lex();
+    if (toTok.tag != Token::To) {
+        throw ParseException(toTok, "Expected TO after FOR let statement");
     }
     auto endExpr = ExprAST::parse(ctx->lexer.lex(), ctx);
 
@@ -583,8 +588,9 @@ std::unique_ptr<ExprAST> ForAST::parse(const Token& tok, BasicContext* ctx) {
         bodyExpr = BlockAST::parse(ctx->lexer.lex(), ctx, {Token::Next});
     } else {
         bodyExpr = StatementAST::parse(bodyTok, ctx);
-        if (ctx->lexer.lex().tag != Token::Next) {
-            throw ParseException("Expected NEXT after for body");
+        auto nextTok = ctx->lexer.lex();
+        if (nextTok.tag != Token::Next) {
+            throw ParseException(nextTok, "Expected NEXT after for body");
         }
     }
 
@@ -604,7 +610,7 @@ std::unique_ptr<ExprAST> FunctionCallAST::parse(const Token& tok, BasicContext* 
     Token curTok = ctx->lexer.peek();
     if (needsParens) {
         if (curTok.tag != Token::LParens) {
-            throw ParseException("No LParens to start argument list of function call");
+            throw ParseException(curTok, "No LParens to start argument list of function call");
         }
         ctx->lexer.lex();
     }
@@ -620,7 +626,7 @@ std::unique_ptr<ExprAST> FunctionCallAST::parse(const Token& tok, BasicContext* 
 
     if (needsParens) {
         if (curTok.tag != Token::RParens) {
-            throw ParseException("No RParens at end of argument list of function call");
+            throw ParseException(curTok, "No RParens at end of argument list of function call");
         }
     } else {
         ctx->lexer.putBack(curTok);
@@ -633,7 +639,7 @@ std::unique_ptr<ExprAST> ProtoDefAST::parse(const Token& tok, BasicContext* ctx)
     auto nameTok = ctx->lexer.lex();
     if (nameTok.tag != Token::String && nameTok.tag != Token::Print &&
         nameTok.tag != Token::Input && nameTok.tag != Token::Variable) {
-        throw ParseException("Expected function name");
+        throw ParseException(nameTok, "Expected function name");
     }
 
     VariableType returnType = Void;
@@ -644,8 +650,9 @@ std::unique_ptr<ExprAST> ProtoDefAST::parse(const Token& tok, BasicContext* ctx)
         name = nameTok.strValue;
     }
 
-    if (ctx->lexer.lex().tag != Token::LParens) {
-        throw ParseException("Expected LParens to start argument list of extern def");
+    auto lParens = ctx->lexer.lex();
+    if (lParens.tag != Token::LParens) {
+        throw ParseException(lParens, "Expected LParens to start argument list of extern def");
     }
 
     bool isVarArg = false;
@@ -658,15 +665,18 @@ std::unique_ptr<ExprAST> ProtoDefAST::parse(const Token& tok, BasicContext* ctx)
         } else if (argNameTok.tag == Token::Variable) {
             name = ctx->makeVariableName(argNameTok, &type);
             return Argument(argNameTok, ctx, type, name);
-        } else if (argNameTok.tag != Token::String) {
-            throw ParseException("Expected argument name to be a string");
+        } else if (argNameTok.tag != Token::String && argNameTok.tag != Token::Variable) {
+            throw ParseException(argNameTok, "Expected argument name to be a string");
         }
-        name = argNameTok.strValue;
+        name = ctx->makeVariableName(argNameTok, &type);
 
         auto maybeAs = ctx->lexer.lex();
         if (maybeAs.tag != Token::As) {
             ctx->lexer.putBack(maybeAs);
-            return Argument(argNameTok, ctx, Integer, name);
+            if (type == Void) {
+                type = Integer;
+            }
+            return Argument(argNameTok, ctx, type, name);
         }
 
         auto argTypeTok = ctx->lexer.lex();
@@ -677,7 +687,7 @@ std::unique_ptr<ExprAST> ProtoDefAST::parse(const Token& tok, BasicContext* ctx)
         } else if (argTypeTok.tag == Token::IntegerType) {
             type = Integer;
         } else {
-            throw ParseException("Unknown type for argument in extern def");
+            throw ParseException(argTypeTok, "Unknown type for argument in extern def");
         }
 
         return Argument(argNameTok, ctx, type, name);
@@ -685,7 +695,8 @@ std::unique_ptr<ExprAST> ProtoDefAST::parse(const Token& tok, BasicContext* ctx)
 
     if (isVarArg) {
         if (args.back().name() != "...") {
-            throw ParseException("Function prototype has a va_arg, but doesn't end in ...");
+            throw ParseException(args.back().token(),
+                                 "Function prototype has a va_arg, but doesn't end in ...");
         }
         args.pop_back();
     }
@@ -694,7 +705,7 @@ std::unique_ptr<ExprAST> ProtoDefAST::parse(const Token& tok, BasicContext* ctx)
     bool inserted;
     std::tie(std::ignore, inserted) = ctx->externFunctions.emplace(name, ret.get());
     if (!inserted) {
-        throw ParseException("Duplicate definition of extern def");
+        throw ParseException(tok, "Duplicate definition of extern def");
     }
 
     return ret;
@@ -712,8 +723,9 @@ void FunctionAST::_setBody(std::unique_ptr<ExprAST> body) {
 std::unique_ptr<ExprAST> FunctionAST::parse(const Token& tok, BasicContext* ctx) {
     std::unique_ptr<ProtoDefAST> proto(
         static_cast<ProtoDefAST*>(ProtoDefAST::parse(tok, ctx).release()));
-    if (ctx->lexer.lex().tag != Token::Newline) {
-        throw ParseException("Expected new line after function prototype");
+    auto newLineTok = ctx->lexer.lex();
+    if (newLineTok.tag != Token::Newline) {
+        throw ParseException(newLineTok, "Expected new line after function prototype");
     }
 
     for (auto it = ctx->namedVariables.begin(); it != ctx->namedVariables.end(); ++it) {

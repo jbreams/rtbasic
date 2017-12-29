@@ -55,8 +55,14 @@ int main(int argc, char** argv) {
     Lexer lexer(opts.inputFilename == "-" ? &std::cin : &inputFile);
 
     BasicContext ctx(std::move(lexer), opts.inputFilename, opts.mainFunctionName);
+    std::unique_ptr<ExprAST> programBody;
 
-    auto programBody = BlockAST::parse(ctx.lexer.lex(), &ctx, {Token::End}, true);
+    try {
+        programBody = BlockAST::parse(ctx.lexer.lex(), &ctx, {Token::End}, true);
+    } catch (ParseException& e) {
+        std::cerr << e.what() << std::endl;
+        return 1;
+    }
     ctx.namedVariables.clear();
 
     auto target = buildTargetMachine();

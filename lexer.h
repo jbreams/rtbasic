@@ -6,6 +6,7 @@
 #include <ostream>
 #include <string>
 
+class Lexer;
 struct Token {
     virtual ~Token() = default;
 
@@ -68,12 +69,14 @@ struct Token {
     };
 
     Token() = default;
-    explicit Token(Tag value) : tag(value) {}
-    explicit Token(Tag value, std::string extra) : tag(value), strValue(std::move(extra)) {}
+    explicit Token(Lexer* lexer, Tag tag) : Token(lexer, tag, std::string(), NumValue()) {}
+    explicit Token(Lexer* lexer, Tag tag, std::string extra)
+        : Token(lexer, tag, std::move(extra), NumValue()) {}
     template <typename T,
               typename = std::enable_if_t<!std::is_same<T, std::string>::value &&
                                           !std::is_same<T, const char*>::value>>
-    explicit Token(Tag value, T extra) : tag(value), value(std::move(extra)) {}
+    explicit Token(Lexer* lexer, Tag tag, T extra)
+        : Token(lexer, tag, std::string(), std::move(extra)) {}
 
     bool isEnding() const {
         return tag == Newline || tag == Eof;
@@ -84,8 +87,17 @@ struct Token {
     }
 
     Tag tag = MaxTag;
-    boost::variant<int64_t, double, char> value;
+    using NumValue = boost::variant<int64_t, double, char>;
+    NumValue value;
     std::string strValue;
+
+    std::shared_ptr<std::string> line;
+    int startPos;
+    int endPos;
+    int lineNumber;
+
+private:
+    explicit Token(Lexer* lexer, Tag value, std::string strValue, NumValue numValue);
 };
 
 std::ostream& operator<<(std::ostream& stream, const Token& token);
@@ -104,7 +116,7 @@ private:
 
 class Lexer {
 public:
-    explicit Lexer(std::istream* stream) : _stream(stream) {
+    explicit Lexer(std::istream* stream) : _line(std::make_shared<std::string>()), _stream(stream) {
         stream->exceptions(std::ios_base::badbit);
     }
 
@@ -127,14 +139,16 @@ private:
     Token _lex();
 
     friend class LexerError;
+    friend struct Token;
     Token _extractNumber();
     long _extractInt(int base = 10);
     std::string _extractEscapedString(char endAt);
 
-    std::string _line;
+    std::shared_ptr<std::string> _line;
     std::istream* _stream;
     int _lineCount = 0;
     bool _seenToken = false;
+    size_t _lastPos;
     size_t _pos;
     std::deque<Token> _putBackTokens;
 };

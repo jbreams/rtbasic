@@ -71,8 +71,7 @@ struct BasicContext {
 class ParseException : public std::exception {
 public:
     ProtoDefAST* currentFunction = nullptr;
-    ParseException(std::string str) : _str(str) {}
-
+    ParseException(const Token& tok, std::string str);
     const char* what() const noexcept override {
         return _str.c_str();
     }
