@@ -419,6 +419,43 @@ private:
     std::unique_ptr<ExprAST> _controlVar, _toExpr, _stepExpr, _bodyExpr;
 };
 
+class WhileAST : public ExprAST {
+public:
+    WhileAST(Token tok,
+             BasicContext* ctx,
+             std::unique_ptr<ExprAST> condExpr,
+             bool isNot,
+             std::unique_ptr<ExprAST> body)
+        : ExprAST(std::move(tok), ctx),
+          _condExpr(std::move(condExpr)),
+          _isNot(isNot),
+          _body(std::move(body)) {}
+
+    static std::unique_ptr<ExprAST> parse(const Token& tok, BasicContext* ctx);
+    llvm::Value* codegen() override;
+
+private:
+    std::unique_ptr<ExprAST> _condExpr;
+    bool _isNot;
+    std::unique_ptr<ExprAST> _body;
+};
+
+class DoAST : public ExprAST {
+public:
+    DoAST(Token tok,
+          BasicContext* ctx,
+          std::unique_ptr<ExprAST> condExpr,
+          std::unique_ptr<ExprAST> body)
+        : ExprAST(std::move(tok), ctx), _condExpr(std::move(condExpr)), _body(std::move(body)) {}
+
+    static std::unique_ptr<ExprAST> parse(const Token& tok, BasicContext* ctx);
+    llvm::Value* codegen() override;
+
+private:
+    std::unique_ptr<ExprAST> _condExpr;
+    std::unique_ptr<ExprAST> _body;
+};
+
 class IfAST : public ExprAST {
 public:
     IfAST(Token tok,

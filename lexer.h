@@ -30,14 +30,24 @@ struct Token {
         StringType,
         DoubleType,
 
-        Print,
-        If,
-        Then,
+        Not,
+        While,
+        Wend,
+
+        Do,
+        Loop,
+        Until,
+
         For,
         To,
         Step,
         Next,
+
+        If,
+        Then,
         Else,
+
+        Print,
         Goto,
         Input,
         Let,
@@ -79,7 +89,7 @@ struct Token {
         : Token(lexer, tag, std::string(), std::move(extra)) {}
 
     bool isEnding() const {
-        return tag == Newline || tag == Eof;
+        return tag == End || tag == Eof;
     }
 
     bool isFunctionDef() const {

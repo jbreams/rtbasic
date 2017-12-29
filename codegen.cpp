@@ -331,7 +331,7 @@ llvm::Value* BinaryExprAST::codegen() {
                 return builder.CreateFAdd(l, r, "addtmp");
         case Token::Minus:
             if (intVal)
-                return builder.CreateSub(l, r, "addtmp");
+                return builder.CreateSub(l, r, "subtmp");
             else
                 return builder.CreateFSub(l, r, "subtmp");
         case Token::Multiply:
@@ -420,10 +420,7 @@ llvm::Value* RelOpExprAST::codegen() {
             return nullptr;
     }
 
-    if (intVal)
-        return res;
-    else
-        return builder.CreateUIToFP(res, llvm::Type::getDoubleTy(llvmcontext), "booltmp");
+    return res;
 }
 
 llvm::Value* GotoAST::codegen() {
@@ -446,6 +443,65 @@ llvm::Value* GosubAST::codegen() {
 
 llvm::Value* ReturnAST::codegen() {
     return ctx()->builder.CreateRetVoid();
+}
+
+llvm::Value* WhileAST::codegen() {
+    auto& builder = ctx()->builder;
+
+    auto loopBB = llvm::BasicBlock::Create(ctx()->context, "loop");
+    auto condBB = llvm::BasicBlock::Create(ctx()->context, "while");
+    auto afterBB = llvm::BasicBlock::Create(ctx()->context, "afterWhile");
+    builder.CreateBr(condBB);
+
+    ctx()->getCurrentFunction()->getBasicBlockList().push_back(condBB);
+    builder.SetInsertPoint(condBB);
+    auto condResult = _condExpr->codegen();
+    if (!condResult)
+        return nullptr;
+
+    if (_isNot) {
+        builder.CreateCondBr(condResult, afterBB, loopBB);
+    } else {
+        builder.CreateCondBr(condResult, loopBB, afterBB);
+    }
+
+    ctx()->getCurrentFunction()->getBasicBlockList().push_back(loopBB);
+    builder.SetInsertPoint(loopBB);
+    if (!_body->codegen())
+        return nullptr;
+    builder.CreateBr(condBB);
+
+    ctx()->getCurrentFunction()->getBasicBlockList().push_back(afterBB);
+    builder.SetInsertPoint(afterBB);
+    return condResult;
+}
+
+llvm::Value* DoAST::codegen() {
+    auto& builder = ctx()->builder;
+
+    auto loopBB = llvm::BasicBlock::Create(ctx()->context, "loop");
+    auto condBB = llvm::BasicBlock::Create(ctx()->context, "until");
+    auto afterBB = llvm::BasicBlock::Create(ctx()->context, "afterDo");
+
+    builder.CreateBr(loopBB);
+    ctx()->getCurrentFunction()->getBasicBlockList().push_back(loopBB);
+    builder.SetInsertPoint(loopBB);
+    if (!_body->codegen())
+        return nullptr;
+
+    builder.CreateBr(condBB);
+
+    ctx()->getCurrentFunction()->getBasicBlockList().push_back(condBB);
+    builder.SetInsertPoint(condBB);
+    auto condResult = _condExpr->codegen();
+    if (!condResult)
+        return nullptr;
+
+    builder.CreateCondBr(condResult, afterBB, loopBB);
+
+    ctx()->getCurrentFunction()->getBasicBlockList().push_back(afterBB);
+    builder.SetInsertPoint(afterBB);
+    return condResult;
 }
 
 llvm::Value* ForAST::codegen() {
@@ -527,11 +583,6 @@ llvm::Value* IfAST::codegen() {
     }
 
     auto& builder = ctx()->builder;
-    if (cond->getType()->isDoubleTy())
-        cond = builder.CreateFCmpONE(cond, makeLiteralDouble(ctx(), 0.0), "ifcond");
-    else
-        cond = builder.CreateICmpNE(cond, builder.getFalse(), "ifcond");
-
     auto curFunction = ctx()->getCurrentFunction();
     auto thenBB = llvm::BasicBlock::Create(ctx()->context, "then", curFunction);
     auto elseBB = llvm::BasicBlock::Create(ctx()->context, "else");

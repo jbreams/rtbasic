@@ -90,7 +90,7 @@ std::unique_ptr<ExprAST> LineAST::parse(const Token& tok,
 
     // consume the new line.
     auto endTok = ctx->lexer.lex();
-    if (!endTok.isEnding()) {
+    if (endTok.tag != Token::Newline && endTok.tag != Token::Eof) {
         throw ParseException(endTok, "Expected new line or EOF at end of line");
     }
 
@@ -117,6 +117,10 @@ std::unique_ptr<ExprAST> StatementAST::parse(const Token& tok, BasicContext* ctx
             throw ParseException(tok, "Reached END token outside of block parsing");
         case Token::For:
             return ForAST::parse(tok, ctx);
+        case Token::Do:
+            return DoAST::parse(tok, ctx);
+        case Token::While:
+            return WhileAST::parse(tok, ctx);
         case Token::Input:
             return FunctionCallAST::parse(tok, ctx);
         case Token::Print:
@@ -176,17 +180,22 @@ std::unique_ptr<ExprAST> BlockAST::parse(const Token& tok,
                                          BasicContext* ctx,
                                          StopCheck::List stopAt,
                                          bool topLevel) {
-    StopCheck stopCheck(stopAt);
+    StopCheck stopCheck(std::move(stopAt));
 
     std::vector<std::unique_ptr<ExprAST>> blockLines;
     std::list<std::unique_ptr<ExprAST>> mainLines;
-    for (Token curTok = tok; !stopCheck(curTok); curTok = ctx->lexer.lex()) {
+    Token curTok;
+    for (curTok = tok; !stopCheck(curTok); curTok = ctx->lexer.lex()) {
         auto line = LineAST::parse(curTok, ctx);
         if (ctx->currentFunction || line->token().isFunctionDef() || !topLevel) {
             blockLines.push_back(std::move(line));
         } else {
             mainLines.push_back(std::move(line));
         }
+    }
+
+    if (!curTok.isEnding() || curTok.tag != Token::End) {
+        ctx->lexer.putBack(curTok);
     }
 
     std::deque<FunctionAST*> curGosubs;
@@ -391,16 +400,9 @@ std::unique_ptr<ExprAST> LabelAST::parse(const Token& tok, BasicContext* ctx) {
     return ret;
 }
 
-std::unique_ptr<ExprAST> IfAST::parse(const Token& tok, BasicContext* ctx) {
+std::unique_ptr<ExprAST> RelOpExprAST::parse(const Token& tok, BasicContext* ctx) {
     auto lhs = ExprAST::parse(ctx->lexer.lex(), ctx);
-    if (!lhs)
-        return nullptr;
     auto condToken = ctx->lexer.lex();
-    auto rhs = ExprAST::parse(ctx->lexer.lex(), ctx);
-    if (!rhs)
-        return nullptr;
-    std::unique_ptr<ExprAST> condExpr;
-
     switch (condToken.tag) {
         case Token::Lt:
         case Token::Gt:
@@ -408,39 +410,44 @@ std::unique_ptr<ExprAST> IfAST::parse(const Token& tok, BasicContext* ctx) {
         case Token::Gte:
         case Token::Eq:
         case Token::Neq:
-            condExpr =
-                std::make_unique<RelOpExprAST>(condToken, ctx, std::move(lhs), std::move(rhs));
             break;
         default:
             throw ParseException(condToken, "Unsupported relop");
     }
 
-    auto nextTok = ctx->lexer.peek();
+    auto rhs = ExprAST::parse(ctx->lexer.lex(), ctx);
+
+    return std::make_unique<RelOpExprAST>(condToken, ctx, std::move(lhs), std::move(rhs));
+}
+
+std::unique_ptr<ExprAST> IfAST::parse(const Token& tok, BasicContext* ctx) {
+    auto condExpr = RelOpExprAST::parse(tok, ctx);
+    auto nextTok = ctx->lexer.lex();
     std::unique_ptr<ExprAST> statementExpr;
     if (nextTok.tag == Token::Then) {
-        ctx->lexer.lex();
-        nextTok = ctx->lexer.peek();
+        nextTok = ctx->lexer.lex();
     }
 
     if (nextTok.tag == Token::Newline) {
-        statementExpr = BlockAST::parse(ctx->lexer.lex(), ctx);
+        statementExpr = BlockAST::parse(ctx->lexer.lex(), ctx, {Token::Else});
     } else {
-        statementExpr = StatementAST::parse(ctx->lexer.lex(), ctx);
+        statementExpr = StatementAST::parse(nextTok, ctx);
     }
 
-    nextTok = ctx->lexer.peek();
+    nextTok = ctx->lexer.lex();
     std::unique_ptr<ExprAST> elseBody;
 
     if (nextTok.tag == Token::Else) {
-        ctx->lexer.lex();
         nextTok = ctx->lexer.lex();
         if (nextTok.tag == Token::Newline) {
-            elseBody = BlockAST::parse(nextTok, ctx);
+            elseBody = BlockAST::parse(ctx->lexer.lex(), ctx);
         } else {
             elseBody = StatementAST::parse(nextTok, ctx);
         }
     } else if (!nextTok.isEnding()) {
         throw ParseException(nextTok, "Expected new statement after if/then without else");
+    } else {
+        ctx->lexer.putBack(nextTok);
     }
     return std::make_unique<IfAST>(
         tok, ctx, std::move(condExpr), std::move(statementExpr), std::move(elseBody));
@@ -564,6 +571,54 @@ std::unique_ptr<ExprAST> ReturnAST::parse(const Token& tok, BasicContext* ctx) {
     return std::make_unique<ReturnAST>(tok, ctx);
 }
 
+std::unique_ptr<ExprAST> WhileAST::parse(const Token& tok, BasicContext* ctx) {
+    auto nextTok = ctx->lexer.peek();
+    bool isNot = (nextTok.tag == Token::Not);
+    if (isNot) {
+        ctx->lexer.lex();
+    }
+
+    auto condExpr = RelOpExprAST::parse(tok, ctx);
+    std::unique_ptr<ExprAST> bodyExpr;
+    nextTok = ctx->lexer.lex();
+    if (nextTok.tag == Token::Newline) {
+        bodyExpr = BlockAST::parse(ctx->lexer.lex(), ctx, {Token::Wend});
+    } else {
+        bodyExpr = StatementAST::parse(nextTok, ctx);
+    }
+
+    nextTok = ctx->lexer.lex();
+    if (nextTok.tag != Token::Wend) {
+        throw ParseException(nextTok, "Expected WEND at end of WHILE");
+    }
+
+    return std::make_unique<WhileAST>(tok, ctx, std::move(condExpr), isNot, std::move(bodyExpr));
+}
+
+std::unique_ptr<ExprAST> DoAST::parse(const Token& tok, BasicContext* ctx) {
+    std::unique_ptr<ExprAST> bodyExpr;
+    auto nextTok = ctx->lexer.lex();
+    if (nextTok.tag == Token::Newline) {
+        bodyExpr = BlockAST::parse(ctx->lexer.lex(), ctx, {Token::Loop});
+    } else {
+        bodyExpr = StatementAST::parse(nextTok, ctx);
+    }
+
+    nextTok = ctx->lexer.lex();
+    if (nextTok.tag != Token::Loop) {
+        throw ParseException(nextTok, "Expected LOOP at end of DO");
+    }
+
+    nextTok = ctx->lexer.lex();
+    if (nextTok.tag != Token::Until) {
+        throw ParseException(nextTok, "Expected UNTIL after LOOP in DO statement");
+    }
+
+    auto condExpr = RelOpExprAST::parse(tok, ctx);
+
+    return std::make_unique<DoAST>(tok, ctx, std::move(condExpr), std::move(bodyExpr));
+}
+
 std::unique_ptr<ExprAST> ForAST::parse(const Token& tok, BasicContext* ctx) {
     auto controlVar = LetAST::parse(ctx->lexer.lex(), ctx, false);
 
@@ -588,10 +643,11 @@ std::unique_ptr<ExprAST> ForAST::parse(const Token& tok, BasicContext* ctx) {
         bodyExpr = BlockAST::parse(ctx->lexer.lex(), ctx, {Token::Next});
     } else {
         bodyExpr = StatementAST::parse(bodyTok, ctx);
-        auto nextTok = ctx->lexer.lex();
-        if (nextTok.tag != Token::Next) {
-            throw ParseException(nextTok, "Expected NEXT after for body");
-        }
+    }
+
+    auto nextTok = ctx->lexer.lex();
+    if (nextTok.tag != Token::Next) {
+        throw ParseException(nextTok, "Expected NEXT after for body");
     }
 
     return std::make_unique<ForAST>(tok,

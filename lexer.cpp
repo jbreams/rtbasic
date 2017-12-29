@@ -31,6 +31,9 @@ const StringToTagMap& stringToTagMap() {
         {"RETURN", Token::Return},     {"STEP", Token::Step},
         {"STRING", Token::StringType}, {"SUB", Token::Sub},
         {"THEN", Token::Then},         {"TO", Token::To},
+        {"WHILE", Token::While},       {"WEND", Token::Wend},
+        {"NOT", Token::Not},           {"DO", Token::Do},
+        {"LOOP", Token::Loop},         {"UNTIL", Token::Until},
     };
     return _stringToTag;
 }
@@ -240,8 +243,10 @@ Token Lexer::_lex() {
         } else if (charIt->second == Token::Gt) {
             auto nextChar = line[++_pos];
             if (nextChar == '=') {
+                _pos++;
                 return Token(this, Token::Gte, ">=");
             } else if (nextChar == '<') {
+                _pos++;
                 return Token(this, Token::Neq, "><");
             } else {
                 return Token(this, charIt->second, charIt->first);
@@ -249,8 +254,10 @@ Token Lexer::_lex() {
         } else if (charIt->second == Token::Lt) {
             auto nextChar = line[++_pos];
             if (nextChar == '=') {
+                _pos++;
                 return Token(this, Token::Lte, "<=");
             } else if (nextChar == '>') {
+                _pos++;
                 return Token(this, Token::Neq, "<>");
             } else {
                 return Token(this, charIt->second, charIt->first);
