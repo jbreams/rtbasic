@@ -7,6 +7,9 @@
 #include "boost/optional.hpp"
 
 #include "ast.h"
+#include "controlflow.h"
+#include "functions.h"
+#include "variables.h"
 
 struct AssignException : public std::exception {
 public:
@@ -41,7 +44,7 @@ ParseException::ParseException(const Token& tok, std::string str) {
 
 std::unique_ptr<FunctionAST> BasicContext::makeMainFunction(std::string name) {
     Token programToken(&lexer, Token::Sub, std::string("main"));
-    std::vector<ProtoDefAST::Argument> args;
+    std::vector<ArgumentAST> args;
 
     auto programProto =
         std::make_unique<ProtoDefAST>(programToken, this, "main", args, false, Void);
@@ -177,18 +180,6 @@ void BlockAST::addStatement(std::unique_ptr<ExprAST> statement) {
     _lines.push_back(std::move(statement));
 }
 
-std::unique_ptr<ProtoDefAST> makeGosubProto(const LabelAST* label) {
-    std::vector<ProtoDefAST::Argument> args;
-    return std::make_unique<ProtoDefAST>(
-        label->token(), label->ctx(), label->token().strValue, std::move(args), false, Void);
-}
-
-std::unique_ptr<FunctionCallAST> makeGosubCall(const Token& tok,
-                                               BasicContext* ctx,
-                                               std::string name) {
-    std::vector<std::unique_ptr<ExprAST>> args;
-    return std::make_unique<FunctionCallAST>(tok, ctx, name, std::move(args));
-}
 
 std::unique_ptr<ExprAST> BlockAST::parse(const Token& tok,
                                          BasicContext* ctx,
@@ -370,35 +361,6 @@ std::unique_ptr<ExprAST> StringAST::parse(const Token& tok, BasicContext* ctx) {
     return std::make_unique<StringAST>(tok, ctx);
 }
 
-template <typename T, typename Func>
-std::vector<T> parseParensList(BasicContext* ctx, Func converter) {
-    auto nextTok = ctx->lexer.lex();
-    std::vector<T> ret;
-    while (nextTok.tag != Token::RParens) {
-        if (nextTok.tag == Token::Comma) {
-            nextTok = ctx->lexer.lex();
-        }
-        ret.push_back(converter(nextTok));
-        nextTok = ctx->lexer.lex();
-    }
-
-    return ret;
-}
-
-std::unique_ptr<ExprAST> VariableExprAST::parse(const Token& tok, BasicContext* ctx) {
-    std::string variableName(ctx->makeVariableName(tok));
-    std::vector<std::unique_ptr<ExprAST>> dimensions;
-
-    auto nextTok = ctx->lexer.lex();
-    if (nextTok.tag == Token::LParens) {
-        dimensions = parseParensList<std::unique_ptr<ExprAST>>(
-            ctx, [ctx](Token tok) { return ExprAST::parse(tok, ctx); });
-    } else {
-        ctx->lexer.putBack(nextTok);
-    }
-    return std::make_unique<VariableExprAST>(tok, ctx, variableName, std::move(dimensions));
-}
-
 std::unique_ptr<ExprAST> LabelAST::parse(const Token& tok, BasicContext* ctx) {
     bool inserted = false;
     const auto& labelName = tok.strValue;
@@ -434,38 +396,6 @@ std::unique_ptr<ExprAST> RelOpExprAST::parse(const Token& tok, BasicContext* ctx
     return std::make_unique<RelOpExprAST>(condToken, ctx, std::move(lhs), std::move(rhs));
 }
 
-std::unique_ptr<ExprAST> IfAST::parse(const Token& tok, BasicContext* ctx) {
-    auto condExpr = RelOpExprAST::parse(tok, ctx);
-    auto nextTok = ctx->lexer.lex();
-    std::unique_ptr<ExprAST> statementExpr;
-    if (nextTok.tag == Token::Then) {
-        nextTok = ctx->lexer.lex();
-    }
-
-    if (nextTok.tag == Token::Newline) {
-        statementExpr = BlockAST::parse(ctx->lexer.lex(), ctx, {Token::Else});
-    } else {
-        statementExpr = StatementAST::parse(nextTok, ctx);
-    }
-
-    nextTok = ctx->lexer.lex();
-    std::unique_ptr<ExprAST> elseBody;
-
-    if (nextTok.tag == Token::Else) {
-        nextTok = ctx->lexer.lex();
-        if (nextTok.tag == Token::Newline) {
-            elseBody = BlockAST::parse(ctx->lexer.lex(), ctx);
-        } else {
-            elseBody = StatementAST::parse(nextTok, ctx);
-        }
-    } else if (!nextTok.isEnding()) {
-        throw ParseException(nextTok, "Expected new statement after if/then without else");
-    } else {
-        ctx->lexer.putBack(nextTok);
-    }
-    return std::make_unique<IfAST>(
-        tok, ctx, std::move(condExpr), std::move(statementExpr), std::move(elseBody));
-}
 
 std::unique_ptr<ExprAST> LetAST::parse(const Token& tok, BasicContext* ctx, bool maybeGlobal) {
     Token nameTok = tok;
@@ -540,291 +470,6 @@ std::unique_ptr<ExprAST> DimAST::parse(const Token& tok, BasicContext* ctx) {
         std::make_unique<DimAST>(tok, ctx, nameTok.strValue, type, std::move(dimensions), global);
 
     ctx->namedVariables[nameTok.strValue] = ret.get();
-
-    return ret;
-}
-
-std::string lexString(Lexer* lexer) {
-    auto labelTok = lexer->lex();
-    std::string gotoName;
-    if (labelTok.tag == Token::String) {
-        gotoName = labelTok.strValue;
-    } else if (labelTok.tag == Token::Double) {
-        std::stringstream ss;
-        ss << boost::get<double>(labelTok.value);
-        gotoName = ss.str();
-    } else if (labelTok.tag == Token::Integer) {
-        std::stringstream ss;
-        ss << boost::get<int64_t>(labelTok.value);
-        gotoName = ss.str();
-    }
-    return gotoName;
-}
-
-std::unique_ptr<ExprAST> GotoAST::parse(const Token& tok, BasicContext* ctx) {
-    auto gotoName = lexString(&ctx->lexer);
-    auto it = ctx->labels.find(gotoName);
-    if (it == ctx->labels.end()) {
-        std::tie(it, std::ignore) = ctx->labels.emplace(gotoName, 1);
-    } else {
-        it->second.gotos++;
-    }
-    return std::make_unique<GotoAST>(tok, ctx, it->first);
-}
-
-std::unique_ptr<ExprAST> GosubAST::parse(const Token& tok, BasicContext* ctx) {
-    auto labelName = lexString(&ctx->lexer);
-    auto it = ctx->labels.find(labelName);
-    if (it == ctx->labels.end()) {
-        std::tie(it, std::ignore) = ctx->labels.emplace(labelName, true);
-    } else {
-        it->second.isGosub = true;
-    }
-
-    return makeGosubCall(tok, ctx, labelName);
-}
-
-std::unique_ptr<ExprAST> ReturnAST::parse(const Token& tok, BasicContext* ctx) {
-    return std::make_unique<ReturnAST>(tok, ctx);
-}
-
-std::unique_ptr<ExprAST> WhileAST::parse(const Token& tok, BasicContext* ctx) {
-    auto nextTok = ctx->lexer.peek();
-    bool isNot = (nextTok.tag == Token::Not);
-    if (isNot) {
-        ctx->lexer.lex();
-    }
-
-    auto condExpr = RelOpExprAST::parse(tok, ctx);
-    std::unique_ptr<ExprAST> bodyExpr;
-    nextTok = ctx->lexer.lex();
-    if (nextTok.tag == Token::Newline) {
-        bodyExpr = BlockAST::parse(ctx->lexer.lex(), ctx, {Token::Wend});
-    } else {
-        bodyExpr = StatementAST::parse(nextTok, ctx);
-    }
-
-    nextTok = ctx->lexer.lex();
-    if (nextTok.tag != Token::Wend) {
-        throw ParseException(nextTok, "Expected WEND at end of WHILE");
-    }
-
-    return std::make_unique<WhileAST>(tok, ctx, std::move(condExpr), isNot, std::move(bodyExpr));
-}
-
-std::unique_ptr<ExprAST> DoAST::parse(const Token& tok, BasicContext* ctx) {
-    std::unique_ptr<ExprAST> bodyExpr;
-    auto nextTok = ctx->lexer.lex();
-    if (nextTok.tag == Token::Newline) {
-        bodyExpr = BlockAST::parse(ctx->lexer.lex(), ctx, {Token::Loop});
-    } else {
-        bodyExpr = StatementAST::parse(nextTok, ctx);
-    }
-
-    nextTok = ctx->lexer.lex();
-    if (nextTok.tag != Token::Loop) {
-        throw ParseException(nextTok, "Expected LOOP at end of DO");
-    }
-
-    nextTok = ctx->lexer.lex();
-    if (nextTok.tag != Token::Until) {
-        throw ParseException(nextTok, "Expected UNTIL after LOOP in DO statement");
-    }
-
-    auto condExpr = RelOpExprAST::parse(tok, ctx);
-
-    return std::make_unique<DoAST>(tok, ctx, std::move(condExpr), std::move(bodyExpr));
-}
-
-std::unique_ptr<ExprAST> ForAST::parse(const Token& tok, BasicContext* ctx) {
-    auto controlVar = LetAST::parse(ctx->lexer.lex(), ctx, false);
-
-    auto toTok = ctx->lexer.lex();
-    if (toTok.tag != Token::To) {
-        throw ParseException(toTok, "Expected TO after FOR let statement");
-    }
-    auto endExpr = ExprAST::parse(ctx->lexer.lex(), ctx);
-
-    std::unique_ptr<ExprAST> stepExpr;
-    auto maybeStep = ctx->lexer.lex();
-    Token bodyTok;
-    if (maybeStep.tag == Token::Step) {
-        stepExpr = ExprAST::parse(ctx->lexer.lex(), ctx);
-        bodyTok = ctx->lexer.lex();
-    } else {
-        bodyTok = maybeStep;
-    }
-
-    std::unique_ptr<ExprAST> bodyExpr;
-    if (bodyTok.tag == Token::Newline) {
-        bodyExpr = BlockAST::parse(ctx->lexer.lex(), ctx, {Token::Next});
-    } else {
-        bodyExpr = StatementAST::parse(bodyTok, ctx);
-    }
-
-    auto nextTok = ctx->lexer.lex();
-    if (nextTok.tag != Token::Next) {
-        throw ParseException(nextTok, "Expected NEXT after for body");
-    }
-
-    return std::make_unique<ForAST>(tok,
-                                    ctx,
-                                    std::move(controlVar),
-                                    std::move(endExpr),
-                                    std::move(stepExpr),
-                                    std::move(bodyExpr));
-}
-
-std::unique_ptr<ExprAST> FunctionCallAST::parse(const Token& tok, BasicContext* ctx) {
-    const auto& functionName = tok.strValue;
-    static const std::unordered_set<std::string> noParensFunctions = {"PRINT", "INPUT"};
-    bool needsParens = noParensFunctions.find(functionName) == noParensFunctions.end();
-
-    Token curTok = ctx->lexer.peek();
-    if (needsParens) {
-        if (curTok.tag != Token::LParens) {
-            throw ParseException(curTok, "No LParens to start argument list of function call");
-        }
-        ctx->lexer.lex();
-    }
-
-    std::vector<std::unique_ptr<ExprAST>> args;
-    do {
-        auto arg = ExprAST::parse(ctx->lexer.lex(), ctx);
-        if (arg) {
-            args.push_back(std::move(arg));
-        }
-        curTok = ctx->lexer.lex();
-    } while (curTok.tag == Token::Comma);
-
-    if (needsParens) {
-        if (curTok.tag != Token::RParens) {
-            throw ParseException(curTok, "No RParens at end of argument list of function call");
-        }
-    } else {
-        ctx->lexer.putBack(curTok);
-    }
-
-    return std::make_unique<FunctionCallAST>(tok, ctx, std::move(functionName), std::move(args));
-}
-
-std::unique_ptr<ExprAST> ProtoDefAST::parse(const Token& tok, BasicContext* ctx) {
-    auto nameTok = ctx->lexer.lex();
-    if (nameTok.tag != Token::String && nameTok.tag != Token::Print &&
-        nameTok.tag != Token::Input && nameTok.tag != Token::Variable) {
-        throw ParseException(nameTok, "Expected function name");
-    }
-
-    VariableType returnType = Void;
-    std::string name;
-    if (tok.tag == Token::Function) {
-        name = ctx->makeVariableName(nameTok, &returnType);
-    } else {
-        name = nameTok.strValue;
-    }
-
-    auto lParens = ctx->lexer.lex();
-    if (lParens.tag != Token::LParens) {
-        throw ParseException(lParens, "Expected LParens to start argument list of extern def");
-    }
-
-    bool isVarArg = false;
-    auto args = parseParensList<Argument>(ctx, [&isVarArg, ctx](Token argNameTok) {
-        VariableType type = Void;
-        std::string name = ctx->makeVariableName(argNameTok, &type);
-        if (argNameTok.tag == Token::Ellipsis) {
-            isVarArg = true;
-            return Argument(argNameTok, ctx, Void, "...");
-        } else if (argNameTok.tag != Token::String && argNameTok.tag != Token::Variable) {
-            throw ParseException(argNameTok, "Expected argument name to be a string");
-        }
-
-        auto maybeAs = ctx->lexer.lex();
-        if (maybeAs.tag != Token::As) {
-            ctx->lexer.putBack(maybeAs);
-            if (type == Void) {
-                type = Integer;
-            }
-            return Argument(argNameTok, ctx, type, name);
-        }
-
-        auto argTypeTok = ctx->lexer.lex();
-        if (argTypeTok.tag == Token::DoubleType) {
-            type = Double;
-        } else if (argTypeTok.tag == Token::StringType) {
-            type = String;
-        } else if (argTypeTok.tag == Token::IntegerType) {
-            type = Integer;
-        } else {
-            throw ParseException(argTypeTok, "Unknown type for argument in extern def");
-        }
-
-        return Argument(argNameTok, ctx, type, name);
-    });
-
-    if (isVarArg) {
-        if (args.back().name() != "...") {
-            throw ParseException(args.back().token(),
-                                 "Function prototype has a va_arg, but doesn't end in ...");
-        }
-        args.pop_back();
-    }
-
-    if (ctx->lexer.peek().tag == Token::Return) {
-        ctx->lexer.lex();
-        auto retTok = ctx->lexer.lex();
-        switch (retTok.tag) {
-            case Token::IntegerType:
-                returnType = Integer;
-                break;
-            case Token::DoubleType:
-                returnType = Double;
-                break;
-            case Token::StringType:
-                returnType = String;
-                break;
-            default:
-                throw ParseException(retTok, "Expected type name for return type");
-        }
-    }
-
-    auto ret = std::make_unique<ProtoDefAST>(tok, ctx, name, std::move(args), isVarArg, returnType);
-    bool inserted;
-    std::tie(std::ignore, inserted) = ctx->externFunctions.emplace(name, ret.get());
-    if (!inserted) {
-        throw ParseException(tok, "Duplicate definition of extern def");
-    }
-
-    return ret;
-}
-
-void FunctionAST::addStatement(std::unique_ptr<ExprAST> statement) {
-    BlockAST* body = static_cast<BlockAST*>(_body.get());
-    body->addStatement(std::move(statement));
-}
-
-void FunctionAST::_setBody(std::unique_ptr<ExprAST> body) {
-    _body = std::move(body);
-}
-
-std::unique_ptr<ExprAST> FunctionAST::parse(const Token& tok, BasicContext* ctx) {
-    std::unique_ptr<ProtoDefAST> proto(
-        static_cast<ProtoDefAST*>(ProtoDefAST::parse(tok, ctx).release()));
-    auto newLineTok = ctx->lexer.lex();
-    if (newLineTok.tag != Token::Newline) {
-        throw ParseException(newLineTok, "Expected new line after function prototype");
-    }
-
-    ctx->clearNonGlobalVariables();
-    for (auto& arg : proto->args()) {
-        ctx->namedVariables[arg.name()] = static_cast<VariableDeclartionAST*>(&arg);
-    }
-
-    auto emptyBody = std::make_unique<BlockAST>(tok, ctx, std::vector<std::unique_ptr<ExprAST>>());
-    auto ret = std::make_unique<FunctionAST>(tok, ctx, std::move(proto), std::move(emptyBody));
-    ctx->currentFunction = ret.get();
-    ret->_setBody(BlockAST::parse(ctx->lexer.lex(), ctx));
-    ctx->currentFunction = nullptr;
 
     return ret;
 }

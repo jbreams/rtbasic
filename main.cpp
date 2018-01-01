@@ -17,7 +17,9 @@
 
 #include "ast.h"
 #include "cli.h"
+#include "functions.h"
 #include "lexer.h"
+#include "variables.h"
 
 llvm::TargetMachine* buildTargetMachine() {
     auto targetTriple = llvm::sys::getDefaultTargetTriple();

@@ -14,7 +14,16 @@ include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 
 # Now build our tools
-add_executable(rtbasic ast.cpp lexer.cpp codegen.cpp main.cpp cli.cpp)
+add_executable(rtbasic
+    ast.cpp
+    lexer.cpp
+    codegen.cpp
+    main.cpp
+    cli.cpp
+    controlflow.cpp
+    functions.cpp
+    variables.cpp
+)
 
 # Find the libraries that correspond to the LLVM components
 # that we wish to use
