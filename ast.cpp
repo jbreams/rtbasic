@@ -11,31 +11,6 @@
 #include "functions.h"
 #include "variables.h"
 
-struct AssignException : public std::exception {
-public:
-    enum Reason {
-        NotString,
-        NoEquals,
-    };
-    AssignException(Reason reason) : _reason(reason) {}
-
-    const char* what() const noexcept override {
-        switch (_reason) {
-            case NotString:
-                return "First token wasn't a string";
-            case NoEquals:
-                return "Expected equals sign between variable and value in assignment";
-        }
-    }
-
-    Reason reason() const {
-        return _reason;
-    }
-
-private:
-    Reason _reason;
-};
-
 ParseException::ParseException(const Token& tok, std::string str) {
     std::stringstream ss;
     ss << "Error parsing: " << str << ". Token was: " << tok;
@@ -394,82 +369,4 @@ std::unique_ptr<ExprAST> RelOpExprAST::parse(const Token& tok, BasicContext* ctx
     auto rhs = ExprAST::parse(ctx->lexer.lex(), ctx);
 
     return std::make_unique<RelOpExprAST>(condToken, ctx, std::move(lhs), std::move(rhs));
-}
-
-
-std::unique_ptr<ExprAST> LetAST::parse(const Token& tok, BasicContext* ctx, bool maybeGlobal) {
-    Token nameTok = tok;
-    if (tok.tag == Token::Let) {
-        nameTok = ctx->lexer.lex();
-    }
-    if (nameTok.tag != Token::String && nameTok.tag != Token::Variable) {
-        throw AssignException(AssignException::NotString);
-    }
-
-    std::unique_ptr<VariableExprAST> variableExpr(
-        static_cast<VariableExprAST*>(VariableExprAST::parse(nameTok, ctx).release()));
-    VariableType type;
-    auto name = ctx->makeVariableName(variableExpr->token(), &type);
-    if (type == Void) {
-        type = Integer;
-    }
-
-    if (ctx->lexer.lex().tag != Token::Eq) {
-        throw AssignException(AssignException::NoEquals);
-    }
-
-    auto value = ExprAST::parse(ctx->lexer.lex(), ctx);
-    bool global = (ctx->currentFunction == nullptr && maybeGlobal);
-    auto ret = std::make_unique<LetAST>(
-        tok, ctx, name, type, std::move(variableExpr), std::move(value), global);
-    ctx->namedVariables[name] = ret.get();
-    return ret;
-}
-
-std::unique_ptr<ExprAST> DimAST::parse(const Token& tok, BasicContext* ctx) {
-    Token nameTok = ctx->lexer.lex();
-    if (nameTok.tag != Token::String && nameTok.tag != Token::Variable) {
-        throw AssignException(AssignException::NotString);
-    }
-
-    auto nextTok = ctx->lexer.lex();
-    std::vector<int> dimensions;
-    VariableType type = Integer;
-    if (nextTok.tag == Token::LParens) {
-        dimensions = parseParensList<int>(ctx, [](Token tok) {
-            if (tok.tag != Token::Integer) {
-                throw ParseException(tok, "Expected integer list for array dimensions");
-            }
-            return boost::get<int64_t>(tok.value);
-        });
-
-        // Consume the RParens
-        nextTok = ctx->lexer.lex();
-    }
-
-    if (nextTok.tag == Token::As) {
-        nextTok = ctx->lexer.lex();
-        switch (nextTok.tag) {
-            case Token::IntegerType:
-                type = Integer;
-                break;
-            case Token::StringType:
-                type = String;
-                break;
-            case Token::DoubleType:
-                type = Double;
-                break;
-            default:
-                throw ParseException(nextTok, "Invalid token while parsing variable type");
-        }
-    } else {
-        ctx->lexer.putBack(nextTok);
-    }
-    bool global = (ctx->currentFunction == nullptr);
-    auto ret =
-        std::make_unique<DimAST>(tok, ctx, nameTok.strValue, type, std::move(dimensions), global);
-
-    ctx->namedVariables[nameTok.strValue] = ret.get();
-
-    return ret;
 }
