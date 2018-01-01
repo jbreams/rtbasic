@@ -68,7 +68,7 @@ std::unique_ptr<ExprAST> IfAST::parse(const Token& tok, BasicContext* ctx) {
     }
 
     if (nextTok.tag == Token::Newline) {
-        statementExpr = BlockAST::parse(ctx->lexer.lex(), ctx, {Token::Else});
+        statementExpr = BlockAST::parse(ctx->lexer.lex(), ctx, {Token::Else, Token::End});
     } else {
         statementExpr = StatementAST::parse(nextTok, ctx);
     }
@@ -79,7 +79,7 @@ std::unique_ptr<ExprAST> IfAST::parse(const Token& tok, BasicContext* ctx) {
     if (nextTok.tag == Token::Else) {
         nextTok = ctx->lexer.lex();
         if (nextTok.tag == Token::Newline) {
-            elseBody = BlockAST::parse(ctx->lexer.lex(), ctx);
+            elseBody = BlockAST::parse(ctx->lexer.lex(), ctx, {Token::End});
         } else {
             elseBody = StatementAST::parse(nextTok, ctx);
         }

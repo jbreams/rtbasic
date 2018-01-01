@@ -4,15 +4,10 @@
 
 std::unique_ptr<ExprAST> FunctionCallAST::parse(const Token& tok, BasicContext* ctx) {
     const auto& functionName = tok.strValue;
-    static const std::unordered_set<std::string> noParensFunctions = {"PRINT", "INPUT"};
-    bool needsParens = noParensFunctions.find(functionName) == noParensFunctions.end();
 
-    Token curTok = ctx->lexer.peek();
-    if (needsParens) {
-        if (curTok.tag != Token::LParens) {
-            throw ParseException(curTok, "No LParens to start argument list of function call");
-        }
-        ctx->lexer.lex();
+    Token curTok = ctx->lexer.lex();
+    if (curTok.tag != Token::LParens) {
+        throw ParseException(curTok, "No LParens to start argument list of function call");
     }
 
     std::vector<std::unique_ptr<ExprAST>> args;
@@ -24,12 +19,8 @@ std::unique_ptr<ExprAST> FunctionCallAST::parse(const Token& tok, BasicContext* 
         curTok = ctx->lexer.lex();
     } while (curTok.tag == Token::Comma);
 
-    if (needsParens) {
-        if (curTok.tag != Token::RParens) {
-            throw ParseException(curTok, "No RParens at end of argument list of function call");
-        }
-    } else {
-        ctx->lexer.putBack(curTok);
+    if (curTok.tag != Token::RParens) {
+        throw ParseException(curTok, "No RParens at end of argument list of function call");
     }
 
     return std::make_unique<FunctionCallAST>(tok, ctx, std::move(functionName), std::move(args));
@@ -150,8 +141,13 @@ std::unique_ptr<ExprAST> FunctionAST::parse(const Token& tok, BasicContext* ctx)
     auto emptyBody = std::make_unique<BlockAST>(tok, ctx, std::vector<std::unique_ptr<ExprAST>>());
     auto ret = std::make_unique<FunctionAST>(tok, ctx, std::move(proto), std::move(emptyBody));
     ctx->currentFunction = ret.get();
-    ret->_setBody(BlockAST::parse(ctx->lexer.lex(), ctx));
+    ret->_setBody(BlockAST::parse(ctx->lexer.lex(), ctx, {Token::End}));
     ctx->currentFunction = nullptr;
+
+    auto endTok = ctx->lexer.lex();
+    if (endTok.tag != Token::End) {
+        throw ParseException(endTok, "Expected END at end of function body");
+    }
 
     return ret;
 }

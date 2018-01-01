@@ -180,7 +180,7 @@ public:
 
     static std::unique_ptr<ExprAST> parse(const Token& tok,
                                           BasicContext* ctx,
-                                          StopCheck::List stopAt = {Token::End});
+                                          StopCheck::List stopAt);
     llvm::Value* codegen() override;
     const Token& token() const override;
     LabelAST* label() const {
@@ -205,7 +205,7 @@ public:
 
     static std::unique_ptr<ExprAST> parse(const Token& tok,
                                           BasicContext* ctx,
-                                          StopCheck::List stopAt = {Token::End},
+                                          StopCheck::List stopAt,
                                           bool topLevel = false);
     llvm::Value* codegen() override;
 

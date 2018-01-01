@@ -226,12 +226,18 @@ std::unique_ptr<ExprAST> LetAST::parse(const Token& tok, BasicContext* ctx, bool
         throw AssignException(AssignException::NotString);
     }
 
-    std::unique_ptr<VariableExprAST> variableExpr(
-        static_cast<VariableExprAST*>(VariableExprAST::parse(nameTok, ctx).release()));
-    VariableType type;
-    auto name = ctx->makeVariableName(variableExpr->token(), &type);
-    if (type == Void) {
-        type = Integer;
+    std::string name;
+    VariableType type = Void;
+    std::unique_ptr<VariableExprAST> variableExpr;
+    if (ctx->externFunctions.find(nameTok.strValue) == ctx->externFunctions.end()) {
+        variableExpr.reset(
+            static_cast<VariableExprAST*>(VariableExprAST::parse(nameTok, ctx).release()));
+        name = ctx->makeVariableName(variableExpr->token(), &type);
+        if (type == Void) {
+            type = Integer;
+        }
+    } else {
+        name = nameTok.strValue;
     }
 
     if (ctx->lexer.lex().tag != Token::Eq) {
@@ -240,9 +246,12 @@ std::unique_ptr<ExprAST> LetAST::parse(const Token& tok, BasicContext* ctx, bool
 
     auto value = ExprAST::parse(ctx->lexer.lex(), ctx);
     bool global = (ctx->currentFunction == nullptr && maybeGlobal);
+    bool isVariable = static_cast<bool>(variableExpr);
     auto ret = std::make_unique<LetAST>(
         tok, ctx, name, type, std::move(variableExpr), std::move(value), global);
-    ctx->namedVariables[name] = ret.get();
+
+    if (isVariable)
+        ctx->namedVariables[name] = ret.get();
     return ret;
 }
 

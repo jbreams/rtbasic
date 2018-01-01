@@ -160,13 +160,13 @@ std::unique_ptr<ExprAST> BlockAST::parse(const Token& tok,
                                          BasicContext* ctx,
                                          StopCheck::List stopAt,
                                          bool topLevel) {
-    StopCheck stopCheck(std::move(stopAt));
+    StopCheck stopCheck(stopAt);
 
     std::vector<std::unique_ptr<ExprAST>> blockLines;
     std::list<std::unique_ptr<ExprAST>> mainLines;
     Token curTok;
     for (curTok = tok; !stopCheck(curTok); curTok = ctx->lexer.lex()) {
-        auto line = LineAST::parse(curTok, ctx);
+        auto line = LineAST::parse(curTok, ctx, stopAt);
         if (ctx->currentFunction || line->token().isFunctionDef() || !topLevel) {
             blockLines.push_back(std::move(line));
         } else {
@@ -174,7 +174,7 @@ std::unique_ptr<ExprAST> BlockAST::parse(const Token& tok,
         }
     }
 
-    if (!curTok.isEnding() || curTok.tag != Token::End) {
+    if (stopCheck.isStopTerm(curTok)) {
         ctx->lexer.putBack(curTok);
     }
 
