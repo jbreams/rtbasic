@@ -55,6 +55,7 @@ bool BasicContext::codegenAllProtos() {
             return false;
         }
     }
+
     return true;
 }
 
@@ -144,24 +145,77 @@ llvm::Value* VariableExprAST::codegenLookup() {
         return nullptr;
     }
 
-    auto& builder = ctx()->builder;
-    if (_dimensions.empty()) {
-        return it->second->allocaInst();
-    } else {
-        std::vector<llvm::Value*> dimensions = {makeLiteralInteger(ctx(), 0)};
-        for (const auto& dimension : _dimensions) {
-            dimensions.push_back(dimension->codegen());
-        }
-
-        auto var = it->second;
-        auto val = var->allocaInst();
-        return builder.CreateInBoundsGEP(var->nativeType(), val, dimensions);
-        ;
-    }
+    return it->second->lookup(_dimensions);
 }
 
 llvm::Value* VariableExprAST::codegen() {
-    return ctx()->builder.CreateLoad(codegenLookup(), _name);
+    auto lookup = codegenLookup();
+    if (!lookup)
+        return nullptr;
+    return ctx()->builder.CreateLoad(lookup, _name);
+}
+
+llvm::Value* VariableDeclartionAST::codegen() {
+    if (_alloca)
+        return _alloca;
+
+    if (ctx()->namedVariables.find(name()) != ctx()->namedVariables.end()) {
+        std::cerr << "Duplicate variable definition for " << name();
+        return nullptr;
+    }
+
+    llvm::Type* type = nativeType();
+
+    if (isGlobal()) {
+        auto globalPtr = ctx()->module->getOrInsertGlobal(name(), type);
+        auto global = ctx()->module->getGlobalVariable(name());
+        if (!global->hasInitializer()) {
+            llvm::Constant* initV;
+            if (type->isDoubleTy()) {
+                initV = makeLiteralDouble(ctx(), 0.0);
+            } else if (type->isIntegerTy()) {
+                initV = makeLiteralInteger(ctx(), 0);
+            } else if (type == ctx()->builder.getInt8PtrTy()) {
+                initV = llvm::ConstantPointerNull::get(llvm::Type::getInt8PtrTy(ctx()->context));
+            } else if (!type->isArrayTy()) {
+                std::cerr << "Cannot find initial value for variable " << name() << std::endl;
+                return nullptr;
+            }
+
+            if (!dimensions().empty()) {
+                initV = llvm::ConstantAggregateZero::get(type);
+            }
+            global->setInitializer(initV);
+            global->setLinkage(llvm::GlobalValue::CommonLinkage);
+        }
+
+        ctx()->namedVariables[name()] = this;
+        _alloca = globalPtr;
+        return globalPtr;
+    } else {
+        ctx()->namedVariables[name()] = this;
+        _alloca = CreateEntryBlockAlloca(ctx(), name(), type);
+        return _alloca;
+    }
+}
+
+llvm::Value* VariableDeclartionAST::lookup() const {
+    return _alloca;
+}
+
+llvm::Value* VariableDeclartionAST::lookup(
+    const std::vector<std::unique_ptr<ExprAST>>& dimensions) const {
+    auto& builder = ctx()->builder;
+    if (dimensions.empty()) {
+        return lookup();
+    } else {
+        std::vector<llvm::Value*> generatedDimensions = {makeLiteralInteger(ctx(), 0)};
+        for (const auto& dimension : dimensions) {
+            generatedDimensions.push_back(dimension->codegen());
+        }
+
+        return builder.CreateInBoundsGEP(nativeType(), lookup(), generatedDimensions);
+    }
 }
 
 llvm::Type* DimAST::nativeType() const {
@@ -174,137 +228,62 @@ llvm::Type* DimAST::nativeType() const {
 }
 
 llvm::Value* DimAST::codegen() {
-    llvm::Constant* initV;
-    llvm::Type* type = nativeType();
-    if (_type == Double) {
-        initV = makeLiteralDouble(ctx(), 0.0);
-    } else if (_type == Integer) {
-        initV = makeLiteralInteger(ctx(), 0);
-    } else if (_type == String) {
-        initV = llvm::ConstantPointerNull::get(llvm::Type::getInt8PtrTy(ctx()->context));
-    } else {
-        std::cerr << "Cannot find initial value for variable " << _name << std::endl;
+    if (!VariableDeclartionAST::codegen()) {
         return nullptr;
     }
 
-    if (!dimensions().empty()) {
-        initV = llvm::ConstantAggregateZero::get(type);
-    }
-
-    ctx()->namedVariables[_name] = this;
-    if (_global) {
-        auto globalPtr = ctx()->module->getOrInsertGlobal(_name, type);
-        auto global = ctx()->module->getGlobalVariable(_name);
-        if (!global->hasInitializer()) {
-            global->setInitializer(initV);
-            global->setLinkage(llvm::GlobalValue::CommonLinkage);
-        }
-
-        return globalPtr;
-    }
-
-    auto alloc = CreateEntryBlockAlloca(ctx(), _name, type);
-    _alloca = alloc;
-
-    return alloc;
+    return lookup();
 }
 
 const std::string& DimAST::name() const {
     return _name;
 }
 
-llvm::Value* DimAST::allocaInst() const {
-    if (_global) {
-        return ctx()->module->getOrInsertGlobal(name(), nativeType());
-    } else {
-        return _alloca;
-    }
-}
-
 llvm::Type* LetAST::nativeType() const {
     return astTypeToNativeType(ctx(), _type);
 }
 
-llvm::Value* LetAST::allocaInst() const {
-    if (_global) {
-        return ctx()->module->getOrInsertGlobal(name(), nativeType());
-    } else {
-        return _alloca;
-    }
-}
-
 llvm::Value* LetAST::codegen() {
     auto& builder = ctx()->builder;
-    llvm::Value* initV;
-    if (_value) {
-        initV = _value->codegen();
-        if (!initV) {
-            std::cerr << "Error generating initial value for let variable" << std::endl;
+
+    if (_name == ctx()->getCurrentFunction()->getName()) {
+        if (!_value) {
+            std::cerr << "Missing value in assignment used as return statement" << std::endl;
             return nullptr;
         }
-
-        if (_type == Double && initV->getType() != ctx()->builder.getDoubleTy()) {
-            initV = ctx()->builder.CreateIntCast(initV, ctx()->builder.getDoubleTy(), true);
-        } else if (_type == Integer && initV->getType() != ctx()->builder.getInt64Ty()) {
-            initV = ctx()->builder.CreateFPCast(initV, ctx()->builder.getInt64Ty());
-        }
-        if (!initV) {
-            std::cerr << "Error casting initial value for let variable" << std::endl;
-            return nullptr;
-        }
+        return builder.CreateRet(_value->codegen());
     }
 
-    if (ctx()->namedVariables.find(_name) != ctx()->namedVariables.end()) {
-        return builder.CreateStore(initV, _variableExpr->codegenLookup());
-    } else if (_name == ctx()->getCurrentFunction()->getName()) {
-        return builder.CreateRet(initV);
-    }
-
-    if (_global) {
-        llvm::Type* type = nativeType();
-        llvm::Constant* initV;
-        if (_type == Double) {
-            initV = llvm::ConstantFP::get(type, 0.0);
-        } else if (_type == Integer) {
-            initV = llvm::ConstantInt::getSigned(type, 0);
-        } else if (_type == String) {
-            initV = llvm::ConstantPointerNull::get(llvm::Type::getInt8PtrTy(ctx()->context));
-        }
-        auto globalPtr = ctx()->module->getOrInsertGlobal(_name, type);
-        auto global = ctx()->module->getGlobalVariable(_name);
-        if (!global->hasInitializer()) {
-            global->setInitializer(initV);
-            global->setLinkage(llvm::GlobalValue::CommonLinkage);
-        }
-
-        auto ret = _value->codegen();
-        if (!ret) {
-            std::cerr << "Error generating value for global variable" << std::endl;
-            return nullptr;
-        }
-        ctx()->namedVariables[name()] = this;
-        builder.CreateStore(ret, globalPtr);
-        return ret;
-    }
-
-    auto alloc = CreateEntryBlockAlloca(ctx(), _name, initV->getType());
-    _alloca = alloc;
-    ctx()->namedVariables[_name] = this;
-
-    if (initV) {
-        return builder.CreateStore(initV, alloc);
-    } else if (_type == Double) {
-        initV = makeLiteralDouble(ctx(), 0.0);
-    } else if (_type == Integer) {
-        initV = makeLiteralInteger(ctx(), 0);
-    } else if (_type == String) {
-        initV = llvm::ConstantPointerNull::get(llvm::Type::getInt8PtrTy(ctx()->context));
+    llvm::Value* alloca;
+    if (ctx()->isNamedVariable(_name)) {
+        alloca = _variableExpr->codegenLookup();
     } else {
-        std::cerr << "Cannot find initial value for variable " << _name << std::endl;
+        alloca = VariableDeclartionAST::codegen();
+    }
+
+    auto type = alloca->getType();
+    if (type->isPointerTy()) {
+        auto ptr = static_cast<llvm::PointerType*>(type);
+        type = ptr->getPointerElementType();
+    }
+
+    auto value = _value->codegen();
+    if (!value) {
+        std::cerr << "Error generating value for assignment" << std::endl;
         return nullptr;
     }
 
-    return initV;
+    if (type->isDoubleTy() && value->getType() != ctx()->builder.getDoubleTy()) {
+        value = ctx()->builder.CreateIntCast(value, ctx()->builder.getDoubleTy(), true);
+    } else if (type->isIntegerTy() && value->getType() != ctx()->builder.getInt64Ty()) {
+        value = ctx()->builder.CreateFPCast(value, ctx()->builder.getInt64Ty());
+    }
+    if (!value) {
+        std::cerr << "Error casting value for assignment" << std::endl;
+        return nullptr;
+    }
+
+    return builder.CreateStore(value, alloca);
 }
 
 llvm::Value* BinaryExprAST::codegen() {
@@ -375,7 +354,6 @@ llvm::Value* RelOpExprAST::codegen() {
     bool intVal = l->getType()->isIntegerTy();
 
     auto& builder = ctx()->builder;
-    auto& llvmcontext = ctx()->context;
 
     llvm::Value* res;
     switch (token().tag) {
@@ -526,7 +504,7 @@ llvm::Value* ForAST::codegen() {
         return nullptr;
     }
 
-    auto curVar = builder.CreateLoad(controlVar->allocaInst());
+    auto curVar = builder.CreateLoad(controlVar->lookup());
     if (controlVarIsInt) {
         endV = builder.CreateICmpSLT(curVar, endV, "loopcond");
     } else {
@@ -543,7 +521,7 @@ llvm::Value* ForAST::codegen() {
         return nullptr;
     }
 
-    curVar = builder.CreateLoad(controlVar->allocaInst());
+    curVar = builder.CreateLoad(controlVar->lookup());
     llvm::Value* stepV = nullptr;
     if (_stepExpr) {
         stepV = _stepExpr->codegen();
@@ -565,7 +543,7 @@ llvm::Value* ForAST::codegen() {
     } else {
         nextVar = builder.CreateFAdd(curVar, stepV, "nextvar");
     }
-    builder.CreateStore(nextVar, controlVar->allocaInst());
+    builder.CreateStore(nextVar, controlVar->lookup());
     builder.CreateBr(loopBB);
 
     ctx()->getCurrentFunction()->getBasicBlockList().push_back(afterBB);
@@ -600,10 +578,10 @@ llvm::Value* IfAST::codegen() {
         return nullptr;
     }
 
+    thenBB = builder.GetInsertBlock();
     if (!thenBB->getTerminator()) {
         builder.CreateBr(mergeBB);
     }
-    thenBB = builder.GetInsertBlock();
 
     if (_else) {
         curFunction->getBasicBlockList().push_back(elseBB);
@@ -619,6 +597,9 @@ llvm::Value* IfAST::codegen() {
         elseBB = builder.GetInsertBlock();
     }
 
+    if (!builder.GetInsertBlock()->getTerminator()) {
+        builder.CreateBr(mergeBB);
+    }
     curFunction->getBasicBlockList().push_back(mergeBB);
     builder.SetInsertPoint(mergeBB);
 
@@ -686,12 +667,6 @@ llvm::Value* ProtoDefAST::codegen() {
     return _function;
 }
 
-llvm::Value* ProtoDefAST::Argument::codegen() {
-    _alloca = CreateEntryBlockAlloca(ctx(), name(), nativeType());
-    ctx()->namedVariables[name()] = this;
-    return _alloca;
-}
-
 llvm::Function* FunctionAST::function() const {
     return _function;
 }
@@ -706,11 +681,8 @@ llvm::Value* FunctionAST::codegen() {
     ctx()->currentFunction = this;
     auto bb = llvm::BasicBlock::Create(ctx()->context, "entry", _function);
     ctx()->builder.SetInsertPoint(bb);
-    for (auto it = ctx()->namedVariables.begin(); it != ctx()->namedVariables.end(); ++it) {
-        if (!it->second->isGlobal()) {
-            ctx()->namedVariables.erase(it++);
-        }
-    }
+
+    ctx()->clearNonGlobalVariables();
     for (auto& arg : _proto->args()) {
         if (!arg.codegen()) {
             return nullptr;

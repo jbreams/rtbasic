@@ -66,6 +66,20 @@ bool BasicContext::isNamedVariable(const Token& tok) {
     return namedVariables.find(makeVariableName(tok)) != namedVariables.end();
 }
 
+bool BasicContext::isNamedVariable(const std::string& name) {
+    return namedVariables.find(name) != namedVariables.end();
+}
+
+void BasicContext::clearNonGlobalVariables() {
+    for (auto it = namedVariables.begin(); it != namedVariables.end();) {
+        if (!it->second->isGlobal()) {
+            it = namedVariables.erase(it);
+        } else {
+            it++;
+        }
+    }
+}
+
 std::unique_ptr<ExprAST> LineAST::parse(const Token& tok,
                                         BasicContext* ctx,
                                         StopCheck::List stopAt) {
@@ -82,7 +96,7 @@ std::unique_ptr<ExprAST> LineAST::parse(const Token& tok,
         ctx->lexer.putBack(curTok);
     }
 
-    if (stopCheck(curTok)) {
+    if (stopCheck(curTok) || curTok.isEnding()) {
         return std::make_unique<LineAST>(tok, ctx, std::move(label), nullptr);
     }
 
@@ -90,7 +104,7 @@ std::unique_ptr<ExprAST> LineAST::parse(const Token& tok,
 
     // consume the new line.
     auto endTok = ctx->lexer.lex();
-    if (endTok.tag != Token::Newline && endTok.tag != Token::Eof) {
+    if (!stopCheck(endTok)) {
         throw ParseException(endTok, "Expected new line or EOF at end of line");
     }
 
@@ -476,9 +490,10 @@ std::unique_ptr<ExprAST> LetAST::parse(const Token& tok, BasicContext* ctx, bool
 
     auto value = ExprAST::parse(ctx->lexer.lex(), ctx);
     bool global = (ctx->currentFunction == nullptr && maybeGlobal);
-    ctx->namedVariables[name] = nullptr;
-    return std::make_unique<LetAST>(
+    auto ret = std::make_unique<LetAST>(
         tok, ctx, name, type, std::move(variableExpr), std::move(value), global);
+    ctx->namedVariables[name] = ret.get();
+    return ret;
 }
 
 std::unique_ptr<ExprAST> DimAST::parse(const Token& tok, BasicContext* ctx) {
@@ -521,10 +536,12 @@ std::unique_ptr<ExprAST> DimAST::parse(const Token& tok, BasicContext* ctx) {
         ctx->lexer.putBack(nextTok);
     }
     bool global = (ctx->currentFunction == nullptr);
-    ctx->namedVariables[nameTok.strValue] = nullptr;
+    auto ret =
+        std::make_unique<DimAST>(tok, ctx, nameTok.strValue, type, std::move(dimensions), global);
 
-    return std::make_unique<DimAST>(
-        tok, ctx, nameTok.strValue, type, std::move(dimensions), global);
+    ctx->namedVariables[nameTok.strValue] = ret.get();
+
+    return ret;
 }
 
 std::string lexString(Lexer* lexer) {
@@ -639,7 +656,7 @@ std::unique_ptr<ExprAST> ForAST::parse(const Token& tok, BasicContext* ctx) {
     }
 
     std::unique_ptr<ExprAST> bodyExpr;
-    if (bodyTok.isEnding()) {
+    if (bodyTok.tag == Token::Newline) {
         bodyExpr = BlockAST::parse(ctx->lexer.lex(), ctx, {Token::Next});
     } else {
         bodyExpr = StatementAST::parse(bodyTok, ctx);
@@ -700,7 +717,7 @@ std::unique_ptr<ExprAST> ProtoDefAST::parse(const Token& tok, BasicContext* ctx)
 
     VariableType returnType = Void;
     std::string name;
-    if (tok.tag == Token::Function || tok.tag == Token::Extern) {
+    if (tok.tag == Token::Function) {
         name = ctx->makeVariableName(nameTok, &returnType);
     } else {
         name = nameTok.strValue;
@@ -714,17 +731,13 @@ std::unique_ptr<ExprAST> ProtoDefAST::parse(const Token& tok, BasicContext* ctx)
     bool isVarArg = false;
     auto args = parseParensList<Argument>(ctx, [&isVarArg, ctx](Token argNameTok) {
         VariableType type = Void;
-        std::string name;
+        std::string name = ctx->makeVariableName(argNameTok, &type);
         if (argNameTok.tag == Token::Ellipsis) {
             isVarArg = true;
             return Argument(argNameTok, ctx, Void, "...");
-        } else if (argNameTok.tag == Token::Variable) {
-            name = ctx->makeVariableName(argNameTok, &type);
-            return Argument(argNameTok, ctx, type, name);
         } else if (argNameTok.tag != Token::String && argNameTok.tag != Token::Variable) {
             throw ParseException(argNameTok, "Expected argument name to be a string");
         }
-        name = ctx->makeVariableName(argNameTok, &type);
 
         auto maybeAs = ctx->lexer.lex();
         if (maybeAs.tag != Token::As) {
@@ -757,6 +770,24 @@ std::unique_ptr<ExprAST> ProtoDefAST::parse(const Token& tok, BasicContext* ctx)
         args.pop_back();
     }
 
+    if (ctx->lexer.peek().tag == Token::Return) {
+        ctx->lexer.lex();
+        auto retTok = ctx->lexer.lex();
+        switch (retTok.tag) {
+            case Token::IntegerType:
+                returnType = Integer;
+                break;
+            case Token::DoubleType:
+                returnType = Double;
+                break;
+            case Token::StringType:
+                returnType = String;
+                break;
+            default:
+                throw ParseException(retTok, "Expected type name for return type");
+        }
+    }
+
     auto ret = std::make_unique<ProtoDefAST>(tok, ctx, name, std::move(args), isVarArg, returnType);
     bool inserted;
     std::tie(std::ignore, inserted) = ctx->externFunctions.emplace(name, ret.get());
@@ -784,12 +815,7 @@ std::unique_ptr<ExprAST> FunctionAST::parse(const Token& tok, BasicContext* ctx)
         throw ParseException(newLineTok, "Expected new line after function prototype");
     }
 
-    for (auto it = ctx->namedVariables.begin(); it != ctx->namedVariables.end(); ++it) {
-        if (!it->second->isGlobal()) {
-            ctx->namedVariables.erase(it++);
-        }
-    }
-
+    ctx->clearNonGlobalVariables();
     for (auto& arg : proto->args()) {
         ctx->namedVariables[arg.name()] = static_cast<VariableDeclartionAST*>(&arg);
     }

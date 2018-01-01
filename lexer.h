@@ -89,7 +89,7 @@ struct Token {
         : Token(lexer, tag, std::string(), std::move(extra)) {}
 
     bool isEnding() const {
-        return tag == End || tag == Eof;
+        return tag == Newline || tag == Eof;
     }
 
     bool isFunctionDef() const {

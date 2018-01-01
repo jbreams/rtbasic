@@ -61,6 +61,8 @@ struct BasicContext {
 
     bool codegenAllProtos();
     bool isNamedVariable(const Token& tok);
+    bool isNamedVariable(const std::string& name);
+    void clearNonGlobalVariables();
     std::string makeVariableName(const Token& tok, VariableType* typeOut = nullptr);
 
     std::unordered_map<std::string, ProtoDefAST*> externFunctions;
@@ -234,7 +236,6 @@ class VariableDeclartionAST : public ExprAST {
 public:
     VariableDeclartionAST(Token tok, BasicContext* ctx) : ExprAST(std::move(tok), ctx) {}
 
-    virtual llvm::Value* allocaInst() const = 0;
     virtual llvm::Type* nativeType() const = 0;
     virtual const std::string& name() const = 0;
     virtual bool isGlobal() const = 0;
@@ -242,6 +243,13 @@ public:
         static std::vector<int> ret;
         return ret;
     }
+
+    llvm::Value* codegen() override;
+    llvm::Value* lookup() const;
+    llvm::Value* lookup(const std::vector<std::unique_ptr<ExprAST>>& dimensions) const;
+
+private:
+    llvm::Value* _alloca;
 };
 
 class LetAST : public VariableDeclartionAST {
@@ -268,12 +276,12 @@ public:
                                           BasicContext* ctx,
                                           bool maybeGlobal = true);
 
-    llvm::Value* allocaInst() const override;
     llvm::Type* nativeType() const override;
 
     const std::string& name() const override {
         return _name;
     }
+
 
     bool isGlobal() const override {
         return _global;
@@ -285,7 +293,6 @@ private:
     std::unique_ptr<ExprAST> _value;
     VariableType _type;
     bool _global;
-    llvm::AllocaInst* _alloca;
 };
 
 class DimAST : public VariableDeclartionAST {
@@ -305,7 +312,6 @@ public:
     llvm::Value* codegen() override;
     static std::unique_ptr<ExprAST> parse(const Token& tok, BasicContext* ctx);
 
-    llvm::Value* allocaInst() const override;
     llvm::Type* nativeType() const override;
     const std::string& name() const override;
     const std::vector<int>& dimensions() const override {
@@ -320,7 +326,6 @@ private:
     VariableType _type;
     std::vector<int> _dimensions;
     bool _global;
-    llvm::AllocaInst* _alloca;
 };
 
 class BinaryExprAST : public ExprAST {
@@ -510,11 +515,6 @@ public:
 
         const VariableType type;
 
-        llvm::Value* codegen() override;
-        llvm::Value* allocaInst() const override {
-            return _alloca;
-        }
-
         const std::string& name() const override {
             return _name;
         }
@@ -526,7 +526,6 @@ public:
 
     private:
         std::string _name;
-        llvm::AllocaInst* _alloca;
     };
 
     ProtoDefAST(Token tok,

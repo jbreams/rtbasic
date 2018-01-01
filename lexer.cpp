@@ -5,6 +5,8 @@
 #include <string>
 #include <unordered_map>
 
+#include "llvm/ADT/StringRef.h"
+
 #include "lexer.h"
 
 Token::Token(Lexer* lexer, Tag value, std::string strValue, Token::NumValue numValue)
@@ -93,12 +95,14 @@ Token Lexer::_extractNumber() {
     int64_t intVal = 0;
     double intPart;
     double dblVal = std::strtod(ptr, &endPtr);
+    llvm::StringRef ref(ptr, endPtr - ptr);
+
     bool isDouble = true;
 
     if (dblVal == HUGE_VAL) {
         intVal = std::strtoll(ptr, &endPtr, 10);
         isDouble = false;
-    } else if (std::modf(dblVal, &intPart) == 0) {
+    } else if (!ref.contains(".") && std::modf(dblVal, &intPart) == 0) {
         intVal = intPart;
         isDouble = false;
     }
@@ -204,12 +208,10 @@ Token Lexer::_lex() {
 
     auto& stringToTag = stringToTagMap();
     auto& charToTag = charToTagMap();
-    auto& line = *_line;
 
     while (!_stream->eof() && _line->empty()) {
         _line = std::make_shared<std::string>();
         std::getline(*_stream, *_line);
-        line = *_line;
         _lineCount++;
         _pos = 0;
         _seenToken = false;
@@ -236,12 +238,12 @@ Token Lexer::_lex() {
         return old == false;
     }();
 
-    auto charIt = charToTag.find(line[_pos]);
+    auto charIt = charToTag.find(_line->at(_pos));
     if (charIt != charToTag.end()) {
-        if (charIt->second == Token::Minus && std::isdigit(line[_pos + 1])) {
+        if (charIt->second == Token::Minus && std::isdigit(_line->at(_pos + 1))) {
             return _extractNumber();
         } else if (charIt->second == Token::Gt) {
-            auto nextChar = line[++_pos];
+            auto nextChar = _line->at(++_pos);
             if (nextChar == '=') {
                 _pos++;
                 return Token(this, Token::Gte, ">=");
@@ -252,7 +254,7 @@ Token Lexer::_lex() {
                 return Token(this, charIt->second, charIt->first);
             }
         } else if (charIt->second == Token::Lt) {
-            auto nextChar = line[++_pos];
+            auto nextChar = _line->at(++_pos);
             if (nextChar == '=') {
                 _pos++;
                 return Token(this, Token::Lte, "<=");
@@ -263,44 +265,46 @@ Token Lexer::_lex() {
                 return Token(this, charIt->second, charIt->first);
             }
         } else {
-            return Token(this, charIt->second, line[_pos++]);
+            return Token(this, charIt->second, _line->at(_pos++));
         }
-    } else if (std::isdigit(line[_pos])) {
+    } else if (std::isdigit(_line->at(_pos))) {
         if (isFirstToken) {  // The first token seen on a line (that's a number) is a line label
             std::stringstream ss;
             ss << _extractInt();
             return Token(this, Token::Label, ss.str());
         }
         return _extractNumber();
-    } else if (line[_pos] == '\"') {
+    } else if (_line->at(_pos) == '\"') {
         return Token(this, Token::EscapedString, _extractEscapedString('\"'));
-    } else if (line[_pos] == '.') {
-        auto ellipsis = line.substr(_pos, 3);
+    } else if (_line->at(_pos) == '.') {
+        auto ellipsis = _line->substr(_pos, 3);
         if (ellipsis == "...") {
             _pos += 3;
             return Token(this, Token::Ellipsis, ellipsis);
         } else {
             throw LexerError(this, "Expected ellipsis");
         }
-    } else if (std::isalpha(line[_pos])) {
+    } else if (std::isalpha(_line->at(_pos))) {
         auto start = _pos;
-        while (_pos < line.size() && std::isalpha(line[_pos])) {
+        while (_pos < _line->size() && std::isalpha(_line->at(_pos))) {
             _pos++;
         }
 
-        auto token = line.substr(start, _pos - start);
+        auto token = _line->substr(start, _pos - start);
         if (token == "REM") {
-            auto end = line.size();
-            token = line.substr(start, end);
+            auto end = _line->size();
+            token = _line->substr(start, end);
             _pos = end;
             return Token(this, Token::Rem, token);
         }
-        if (isFirstToken && line[_pos] == ':') {
-            _pos++;
-            return Token(this, Token::Label, token);
-        } else if (line[_pos] == '#' || line[_pos] == '$' || line[_pos] == '%') {
-            token += line[_pos++];
-            return Token(this, Token::Variable, token);
+        if (_pos < _line->size()) {
+            if (isFirstToken && _line->at(_pos) == ':') {
+                _pos++;
+                return Token(this, Token::Label, token);
+            } else if (_line->at(_pos) == '#' || _line->at(_pos) == '$' || _line->at(_pos) == '%') {
+                token += _line->at(_pos++);
+                return Token(this, Token::Variable, token);
+            }
         }
 
         auto it = stringToTag.find(token);
