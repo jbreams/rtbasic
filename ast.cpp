@@ -114,9 +114,9 @@ std::unique_ptr<ExprAST> StatementAST::parse(const Token& tok, BasicContext* ctx
         case Token::While:
             return WhileAST::parse(tok, ctx);
         case Token::Input:
-            return FunctionCallAST::parse(tok, ctx);
+            return InputAST::parse(tok, ctx);
         case Token::Print:
-            return FunctionCallAST::parse(tok, ctx);
+            return PrintAST::parse(tok, ctx);
         case Token::Rem:  // Remark tokens get a placeholder value in the AST
             return std::make_unique<RemarkAST>(tok, ctx);
         case Token::Extern:
@@ -369,4 +369,61 @@ std::unique_ptr<ExprAST> RelOpExprAST::parse(const Token& tok, BasicContext* ctx
     auto rhs = ExprAST::parse(ctx->lexer.lex(), ctx);
 
     return std::make_unique<RelOpExprAST>(condToken, ctx, std::move(lhs), std::move(rhs));
+}
+
+std::unique_ptr<ExprAST> PrintAST::parse(const Token& tok, BasicContext* ctx) {
+    std::vector<std::unique_ptr<ExprAST>> args;
+    Token curTok;
+    do {
+        auto arg = ExprAST::parse(ctx->lexer.lex(), ctx);
+        if (arg) {
+            args.push_back(std::move(arg));
+        }
+        curTok = ctx->lexer.lex();
+    } while (curTok.tag == Token::Comma);
+
+    ctx->lexer.putBack(curTok);
+
+    return std::make_unique<PrintAST>(tok, ctx, std::move(args));
+}
+
+std::unique_ptr<ExprAST> InputAST::parse(const Token& tok, BasicContext* ctx) {
+    std::vector<std::unique_ptr<ExprAST>> ownedArgs;
+    std::vector<std::unique_ptr<VariableExprAST>> args;
+    std::string question;
+    Token curTok = ctx->lexer.lex();
+    if (curTok.tag == Token::EscapedString) {
+        question = curTok.strValue;
+        curTok = ctx->lexer.lex();
+        if (curTok.tag != Token::Comma) {
+            throw ParseException(curTok, "Expected comma after question in INPUT statement");
+        }
+    } else {
+        ctx->lexer.putBack(curTok);
+    }
+
+    do {
+        auto arg = ctx->lexer.lex();
+        if (arg.tag != Token::String && arg.tag != Token::Variable) {
+            throw ParseException(arg, "Expected variable names for INPUT statement");
+        }
+
+        if (!ctx->isNamedVariable(arg)) {
+            VariableType type = Void;
+            std::string name = ctx->makeVariableName(arg, &type);
+            if (type == Void) {
+                type = Integer;
+            }
+            ownedArgs.push_back(std::make_unique<DimAST>(arg, ctx, name, type));
+        }
+
+        auto varExpr = VariableExprAST::parse(arg, ctx);
+        args.emplace_back(static_cast<VariableExprAST*>(varExpr.release()));
+        curTok = ctx->lexer.lex();
+    } while (curTok.tag == Token::Comma);
+
+    ctx->lexer.putBack(curTok);
+
+    return std::make_unique<InputAST>(
+        tok, ctx, std::move(question), std::move(ownedArgs), std::move(args));
 }

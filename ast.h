@@ -19,7 +19,7 @@ struct BasicContext;
 class ProtoDefAST;
 class FunctionAST;
 class VariableDeclartionAST;
-class LetAST;
+class VariableExprAST;
 
 struct LabelInfo {
     explicit LabelInfo(int initialGotos) : gotos(initialGotos) {}
@@ -281,4 +281,39 @@ public:
     EndAST(Token tok, BasicContext* ctx) : ExprAST(std::move(tok), ctx) {}
 
     llvm::Value* codegen() override;
+};
+
+class PrintAST : public ExprAST {
+public:
+    PrintAST(Token tok, BasicContext* ctx, std::vector<std::unique_ptr<ExprAST>> args)
+        : ExprAST(std::move(tok), ctx), _args(std::move(args)) {}
+
+    llvm::Value* codegen() override;
+
+    static std::unique_ptr<ExprAST> parse(const Token& tok, BasicContext* ctx);
+
+private:
+    std::vector<std::unique_ptr<ExprAST>> _args;
+};
+
+class InputAST : public ExprAST {
+public:
+    InputAST(Token tok,
+             BasicContext* ctx,
+             std::string question,
+             std::vector<std::unique_ptr<ExprAST>> ownedVars,
+             std::vector<std::unique_ptr<VariableExprAST>> args)
+        : ExprAST(std::move(tok), ctx),
+          _question(std::move(question)),
+          _ownedVars(std::move(ownedVars)),
+          _args(std::move(args)) {}
+
+    llvm::Value* codegen() override;
+
+    static std::unique_ptr<ExprAST> parse(const Token& tok, BasicContext* ctx);
+
+private:
+    std::string _question;
+    std::vector<std::unique_ptr<ExprAST>> _ownedVars;
+    std::vector<std::unique_ptr<VariableExprAST>> _args;
 };

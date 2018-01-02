@@ -235,3 +235,86 @@ llvm::Value* RelOpExprAST::codegen() {
 llvm::Value* RemarkAST::codegen() {
     return llvm::Constant::getNullValue(llvm::Type::getDoubleTy(ctx()->context));
 }
+
+llvm::Value* PrintAST::codegen() {
+    auto callee = ctx()->getFunction("PRINT");
+    if (!callee) {
+        std::cerr << "Error getting PRINT function declaration" << std::endl;
+        return nullptr;
+    }
+    std::vector<llvm::Value*> args;
+    args.push_back(nullptr);
+
+    for (const auto& arg : _args) {
+        auto generated = arg->codegen();
+        if (!generated) {
+            std::cerr << "Error generating PRINT argument";
+            return nullptr;
+        }
+        auto type = generated->getType();
+        VariableType basicType;
+
+        if (type->isDoubleTy()) {
+            basicType = Double;
+        } else if (type->isIntegerTy()) {
+            basicType = Integer;
+        } else if (type == ctx()->builder.getInt8PtrTy()) {
+            basicType = String;
+        } else {
+            std::cerr << "Unsupported type for PRINT statement";
+            return nullptr;
+        }
+
+        args.push_back(ctx()->makeLiteralInteger(basicType));
+        args.push_back(generated);
+    }
+
+    args.front() = ctx()->makeLiteralInteger(_args.size());
+
+    return ctx()->builder.CreateCall(callee, args);
+}
+
+llvm::Value* InputAST::codegen() {
+    auto callee = ctx()->getFunction("INPUT");
+    if (!callee) {
+        std::cerr << "Error getting INPUT function declaration" << std::endl;
+        return nullptr;
+    }
+    std::vector<llvm::Value*> args;
+    args.push_back(nullptr);
+
+    for (const auto& decl : _ownedVars) {
+        if (!decl->codegen()) {
+            std::cerr << "Error generating new variable for INPUT statement" << std::endl;
+            return nullptr;
+        }
+    }
+
+    for (const auto& arg : _args) {
+        auto generated = arg->codegenLookup();
+        if (!generated) {
+            std::cerr << "Error generating INPUT argument";
+            return nullptr;
+        }
+        auto type = generated->getType()->getPointerElementType();
+        VariableType basicType;
+
+        if (type->isDoubleTy()) {
+            basicType = Double;
+        } else if (type->isIntegerTy()) {
+            basicType = Integer;
+        } else if (type == ctx()->builder.getInt8PtrTy()) {
+            basicType = String;
+        } else {
+            std::cerr << "Unsupported type for INPUT statement";
+            return nullptr;
+        }
+
+        args.push_back(ctx()->makeLiteralInteger(basicType));
+        args.push_back(generated);
+    }
+
+    args.front() = ctx()->makeLiteralInteger(_args.size());
+
+    return ctx()->builder.CreateCall(callee, args);
+}

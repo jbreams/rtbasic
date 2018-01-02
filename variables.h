@@ -101,6 +101,13 @@ public:
           _dimensions(std::move(dimensions)),
           _global(global) {}
 
+    DimAST(Token tok, BasicContext* ctx, std::string name, VariableType type)
+        : VariableDeclartionAST(std::move(tok), ctx),
+          _name(std::move(name)),
+          _type(type),
+          _dimensions(),
+          _global(ctx->currentFunction == nullptr) {}
+
     llvm::Value* codegen() override;
     static std::unique_ptr<ExprAST> parse(const Token& tok, BasicContext* ctx);
 
@@ -125,6 +132,11 @@ public:
     ArgumentAST(Token tok, BasicContext* ctx, VariableType t, std::string n)
         : VariableDeclartionAST(std::move(tok), ctx), type(t), _name(std::move(n)) {}
 
+    ArgumentAST(Token tok, BasicContext* ctx)
+        : VariableDeclartionAST(std::move(tok), ctx),
+          type(_parseType(token())),
+          _name(ctx->makeVariableName(token(), nullptr)) {}
+
     const VariableType type;
 
     const std::string& name() const override {
@@ -132,10 +144,17 @@ public:
     }
 
     bool isGlobal() const override {
-        return false;
+        return _isGlobal;
     }
     llvm::Type* nativeType() const;
 
 private:
+    VariableType _parseType(const Token& name) {
+        VariableType ret;
+        std::ignore = ctx()->makeVariableName(name, &ret);
+        return ret;
+    }
+
     std::string _name;
+    bool _isGlobal = false;
 };
