@@ -125,7 +125,7 @@ int main(int argc, char** argv) {
             return 0;
     }
 
-    if (target->addPassesToEmitFile(passManager, *output, fileType)) {
+    if (target->addPassesToEmitFile(passManager, *output, nullptr, fileType)) {
         std::cerr << "Cannot emit file of this type" << std::endl;
         return 1;
     }

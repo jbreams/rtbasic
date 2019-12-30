@@ -13,11 +13,11 @@ std::string lexString(Lexer* lexer) {
         gotoName = labelTok.strValue;
     } else if (labelTok.tag == Token::Double) {
         std::stringstream ss;
-        ss << boost::get<double>(labelTok.value);
+        ss << mpark::get<double>(*labelTok.value);
         gotoName = ss.str();
     } else if (labelTok.tag == Token::Integer) {
         std::stringstream ss;
-        ss << boost::get<int64_t>(labelTok.value);
+        ss << mpark::get<int64_t>(*labelTok.value);
         gotoName = ss.str();
     }
     return gotoName;

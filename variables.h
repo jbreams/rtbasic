@@ -146,7 +146,7 @@ public:
     bool isGlobal() const override {
         return _isGlobal;
     }
-    llvm::Type* nativeType() const;
+    llvm::Type* nativeType() const override;
 
 private:
     VariableType _parseType(const Token& name) {

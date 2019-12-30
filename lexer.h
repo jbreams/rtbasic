@@ -1,8 +1,9 @@
 #pragma once
 
-#include <boost/variant.hpp>
+#include "variant.hpp"
 #include <deque>
 #include <istream>
+#include <optional>
 #include <ostream>
 #include <string>
 
@@ -97,8 +98,8 @@ struct Token {
     }
 
     Tag tag = MaxTag;
-    using NumValue = boost::variant<int64_t, double, char>;
-    NumValue value;
+    using NumValue = mpark::variant<int64_t, double, char>;
+    std::optional<NumValue> value;
     std::string strValue;
 
     std::shared_ptr<std::string> line;

@@ -4,7 +4,7 @@
 #include <list>
 #include <sstream>
 
-#include "boost/optional.hpp"
+#include <optional>
 
 #include "ast.h"
 #include "controlflow.h"
@@ -244,7 +244,7 @@ struct OperatorInfo {
 
     OperatorInfo(int p) : precedence(p), associativity(Left) {}
 
-    using Handle = boost::optional<const OperatorInfo&>;
+    using Handle = std::optional<OperatorInfo>;
     static Handle get(const Token& tok);
 };
 
@@ -258,7 +258,7 @@ OperatorInfo::Handle OperatorInfo::get(const Token& tok) {
     };
     auto it = operators.find(tok.tag);
     if (it == operators.end())
-        return boost::none;
+        return std::nullopt;
     return it->second;
 }
 

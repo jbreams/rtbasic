@@ -162,7 +162,7 @@ std::unique_ptr<ExprAST> DimAST::parse(const Token& tok, BasicContext* ctx) {
             if (tok.tag != Token::Integer) {
                 throw ParseException(tok, "Expected integer list for array dimensions");
             }
-            return boost::get<int64_t>(tok.value);
+            return mpark::get<int64_t>(*tok.value);
         });
 
         // Consume the RParens

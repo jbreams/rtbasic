@@ -104,9 +104,9 @@ llvm::Value* BlockAST::codegen() {
 
 llvm::Value* NumberExprAST::codegen() {
     if (token().tag == Token::Double) {
-        return ctx()->makeLiteralDouble(boost::get<double>(token().value));
+        return ctx()->makeLiteralDouble(mpark::get<double>(*token().value));
     } else if (token().tag == Token::Integer) {
-        return ctx()->makeLiteralInteger(boost::get<int64_t>(token().value));
+        return ctx()->makeLiteralInteger(mpark::get<int64_t>(*token().value));
     } else {
         std::cerr << "Invalid token for number expr" << std::endl;
         return nullptr;

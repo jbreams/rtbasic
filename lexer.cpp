@@ -61,7 +61,7 @@ const CharToTagMap& charToTagMap() {
 std::ostream& operator<<(std::ostream& stream, const Token& tok) {
     if (!tok.strValue.empty()) {
         stream << "Tag: " << tok.tag << " value: \"" << tok.strValue << "\"";
-    } else if (tok.value.empty()) {
+    } else if (!tok.value.has_value()) {
         stream << "Tag: " << tok.tag;
         if (tok.tag == Token::Eof) {
             stream << " value: Eof";
@@ -69,7 +69,8 @@ std::ostream& operator<<(std::ostream& stream, const Token& tok) {
             stream << " value: Newline";
         }
     } else {
-        stream << "Tag: " << tok.tag << " value: " << tok.value;
+        stream << "Tag: " << tok.tag << " value: ";
+        mpark::visit([&](const auto val) { stream << val; }, *tok.value);
     }
 
     auto prefix = tok.line->substr(0, tok.startPos);
